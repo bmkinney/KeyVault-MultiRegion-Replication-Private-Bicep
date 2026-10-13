@@ -1,0 +1,479 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.47.16.16243",
+      "templateHash": "16807347445971771806"
+    }
+  },
+  "parameters": {
+    "prefix": {
+      "type": "string",
+      "metadata": {
+        "description": "Regional naming prefix."
+      }
+    },
+    "location": {
+      "type": "string",
+      "metadata": {
+        "description": "App/plan/VNet location."
+      }
+    },
+    "foundation": {
+      "type": "object",
+      "metadata": {
+        "description": "Foundation runtime configuration."
+      }
+    },
+    "sourceVaultId": {
+      "type": "string",
+      "metadata": {
+        "description": "Expected source vault ARM ID."
+      }
+    },
+    "sourceVaultUri": {
+      "type": "string",
+      "metadata": {
+        "description": "Source vault URI."
+      }
+    },
+    "destinationVaultUri": {
+      "type": "string",
+      "metadata": {
+        "description": "Destination vault URI."
+      }
+    },
+    "enabled": {
+      "type": "bool",
+      "metadata": {
+        "description": "Enable replication and reconciliation. Never enable both regional workers."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "metadata": {
+        "description": "Resource tags."
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Web/serverfarms",
+      "apiVersion": "2025-03-01",
+      "name": "[format('plan-{0}', parameters('prefix'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "functionapp",
+      "sku": {
+        "name": "FC1",
+        "tier": "FlexConsumption"
+      },
+      "properties": {
+        "reserved": true
+      }
+    },
+    {
+      "type": "Microsoft.Web/sites",
+      "apiVersion": "2025-03-01",
+      "name": "[format('func-{0}', parameters('prefix'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "functionapp,linux",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', parameters('foundation').identityId)]": {}
+        }
+      },
+      "properties": {
+        "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', format('plan-{0}', parameters('prefix')))]",
+        "httpsOnly": true,
+        "publicNetworkAccess": "Disabled",
+        "virtualNetworkSubnetId": "[parameters('foundation').integrationSubnetId]",
+        "siteConfig": {
+          "minTlsVersion": "1.2",
+          "scmMinTlsVersion": "1.2",
+          "ftpsState": "Disabled",
+          "http20Enabled": true,
+          "appSettings": [
+            {
+              "name": "AzureWebJobsStorage__accountName",
+              "value": "[parameters('foundation').storageName]"
+            },
+            {
+              "name": "AzureWebJobsStorage__credential",
+              "value": "managedidentity"
+            },
+            {
+              "name": "AzureWebJobsStorage__clientId",
+              "value": "[parameters('foundation').identityClientId]"
+            },
+            {
+              "name": "ServiceBusConnection__fullyQualifiedNamespace",
+              "value": "[parameters('foundation').busNamespace]"
+            },
+            {
+              "name": "ServiceBusConnection__credential",
+              "value": "managedidentity"
+            },
+            {
+              "name": "ServiceBusConnection__clientId",
+              "value": "[parameters('foundation').identityClientId]"
+            },
+            {
+              "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
+              "value": "[parameters('foundation').insightsConnectionString]"
+            },
+            {
+              "name": "APPLICATIONINSIGHTS_AUTHENTICATION_STRING",
+              "value": "[format('ClientId={0};Authorization=AAD', parameters('foundation').identityClientId)]"
+            },
+            {
+              "name": "WORKER_CLIENT_ID",
+              "value": "[parameters('foundation').identityClientId]"
+            },
+            {
+              "name": "SOURCE_VAULT_ID",
+              "value": "[parameters('sourceVaultId')]"
+            },
+            {
+              "name": "SOURCE_VAULT_URI",
+              "value": "[parameters('sourceVaultUri')]"
+            },
+            {
+              "name": "DESTINATION_VAULT_URI",
+              "value": "[parameters('destinationVaultUri')]"
+            },
+            {
+              "name": "COORDINATION_BLOB_URI",
+              "value": "[parameters('foundation').storageBlobUri]"
+            },
+            {
+              "name": "REPLICATION_ENABLED",
+              "value": "[string(parameters('enabled'))]"
+            },
+            {
+              "name": "AzureWebJobs.Replicate.Disabled",
+              "value": "[string(not(parameters('enabled')))]"
+            },
+            {
+              "name": "AzureWebJobs.Reconcile.Disabled",
+              "value": "[string(not(parameters('enabled')))]"
+            },
+            {
+              "name": "RECONCILIATION_SCHEDULE",
+              "value": "0 */5 * * * *"
+            }
+          ]
+        },
+        "functionAppConfig": {
+          "runtime": {
+            "name": "python",
+            "version": "3.12"
+          },
+          "deployment": {
+            "storage": {
+              "type": "blobContainer",
+              "value": "[format('{0}deployment', parameters('foundation').storageBlobUri)]",
+              "authentication": {
+                "type": "UserAssignedIdentity",
+                "userAssignedIdentityResourceId": "[parameters('foundation').identityId]"
+              }
+            }
+          },
+          "scaleAndConcurrency": {
+            "instanceMemoryMB": 2048,
+            "maximumInstanceCount": 40,
+            "alwaysReady": [
+              {
+                "name": "function:Replicate",
+                "instanceCount": 1
+              },
+              {
+                "name": "function:Reconcile",
+                "instanceCount": 1
+              }
+            ]
+          }
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/serverfarms', format('plan-{0}', parameters('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/sites/basicPublishingCredentialsPolicies",
+      "apiVersion": "2025-03-01",
+      "name": "[format('{0}/{1}', format('func-{0}', parameters('prefix')), 'scm')]",
+      "properties": {
+        "allow": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('func-{0}', parameters('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Web/sites/basicPublishingCredentialsPolicies",
+      "apiVersion": "2025-03-01",
+      "name": "[format('{0}/{1}', format('func-{0}', parameters('prefix')), 'ftp')]",
+      "properties": {
+        "allow": false
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('func-{0}', parameters('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[resourceId('Microsoft.Web/sites', format('func-{0}', parameters('prefix')))]",
+      "name": "workspace",
+      "properties": {
+        "workspaceId": "[parameters('foundation').workspaceId]",
+        "logs": [
+          {
+            "category": "FunctionAppLogs",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('func-{0}', parameters('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2023-12-01",
+      "name": "[format('alert-{0}-worker', parameters('prefix'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "LogAlert",
+      "properties": {
+        "displayName": "Replication error, expiry, drift, or lag > 60 seconds",
+        "severity": 1,
+        "enabled": true,
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT5M",
+        "scopes": [
+          "[parameters('foundation').workspaceId]"
+        ],
+        "skipQueryValidation": true,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "AppTraces | where Message startswith \"MRKV \" | extend report = parse_json(substring(Message, 5)) | where report.outcome in (\"failure\", \"source_missing\", \"expired\", \"near_expiry\", \"destination_only\") or (report.outcome == \"source_inactive\" and report.destinationExists == false) or todouble(report.lagSeconds) > 60",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[parameters('foundation').actionGroupId]"
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2023-12-01",
+      "name": "[format('alert-{0}-heartbeat', parameters('prefix'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "LogAlert",
+      "properties": {
+        "displayName": "Active reconciliation heartbeat missing",
+        "severity": 1,
+        "enabled": "[parameters('enabled')]",
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT15M",
+        "scopes": [
+          "[parameters('foundation').workspaceId]"
+        ],
+        "skipQueryValidation": true,
+        "criteria": {
+          "allOf": [
+            {
+              "query": "[format('AppTraces | where AppRoleName == \"{0}\" | where Message startswith \"MRKV \" | extend report = parse_json(substring(Message, 5)) | where report.outcome == \"reconciliation_complete\" and toint(report.failures) == 0', format('func-{0}', parameters('prefix')))]",
+              "timeAggregation": "Count",
+              "operator": "LessThan",
+              "threshold": 1,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "actions": {
+          "actionGroups": [
+            "[parameters('foundation').actionGroupId]"
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('func-{0}', parameters('prefix')))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "worker-endpoint",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "name": {
+            "value": "[format('pe-{0}-app', parameters('prefix'))]"
+          },
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "subnetId": {
+            "value": "[parameters('foundation').endpointSubnetId]"
+          },
+          "targetId": {
+            "value": "[resourceId('Microsoft.Web/sites', format('func-{0}', parameters('prefix')))]"
+          },
+          "groupId": {
+            "value": "sites"
+          },
+          "dnsZoneIds": {
+            "value": [
+              "[parameters('foundation').appDnsZoneId]"
+            ]
+          },
+          "tags": {
+            "value": "[parameters('tags')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "5849532379246105690"
+            }
+          },
+          "parameters": {
+            "name": {
+              "type": "string",
+              "metadata": {
+                "description": "Endpoint name."
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Endpoint/VNet region."
+              }
+            },
+            "subnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Undelegated endpoint subnet ID."
+              }
+            },
+            "targetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Target resource ID."
+              }
+            },
+            "groupId": {
+              "type": "string",
+              "metadata": {
+                "description": "Private Link subresource."
+              }
+            },
+            "dnsZoneIds": {
+              "type": "array",
+              "metadata": {
+                "description": "Private DNS zone IDs for this endpoint."
+              }
+            },
+            "tags": {
+              "type": "object",
+              "metadata": {
+                "description": "Resource tags."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2025-05-01",
+              "name": "[parameters('name')]",
+              "location": "[parameters('location')]",
+              "tags": "[parameters('tags')]",
+              "properties": {
+                "subnet": {
+                  "id": "[parameters('subnetId')]"
+                },
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "[parameters('name')]",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('targetId')]",
+                      "groupIds": [
+                        "[parameters('groupId')]"
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2025-05-01",
+              "name": "[format('{0}/{1}', parameters('name'), 'default')]",
+              "properties": {
+                "copy": [
+                  {
+                    "name": "privateDnsZoneConfigs",
+                    "count": "[length(parameters('dnsZoneIds'))]",
+                    "input": {
+                      "name": "[format('zone-{0}', copyIndex('privateDnsZoneConfigs'))]",
+                      "properties": {
+                        "privateDnsZoneId": "[parameters('dnsZoneIds')[copyIndex('privateDnsZoneConfigs')]]"
+                      }
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', parameters('name'))]"
+              ]
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Web/sites', format('func-{0}', parameters('prefix')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "name": {
+      "type": "string",
+      "value": "[format('func-{0}', parameters('prefix'))]"
+    }
+  }
+}

@@ -1,0 +1,4 @@
+azure-functions==1.25.0
+azure-identity==1.26.0
+azure-keyvault-secrets==4.11.3
+azure-storage-blob==12.31.0
