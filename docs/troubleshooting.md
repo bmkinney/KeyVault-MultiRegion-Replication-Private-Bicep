@@ -12,6 +12,9 @@
 | Old state temporarily visible | Source changed during processing; inspect next event/reconciliation | Claim atomic cross-vault consistency |
 | Metadata-only update delayed | Five-minute reconciliation and heartbeat | Claim all changes meet the event latency target |
 | Replica was manually edited | Restrict replica writers and inspect lineage | Trust tags to detect arbitrary value tampering |
+| Existing-vault preflight fails | Same subscription, matching region, RBAC, private access, purge protection, source-topic reuse | Silently change authorization/network settings or create a duplicate topic |
+| No names/prefix selected on a reused vault | Supply allowlist/prefix or explicitly opt into all secrets | Treat an empty prefix as permission to copy everything |
+| Unmanaged destination name collision | Review ownership, narrow selection, explicitly approve replacement only if intended | Automatically overwrite or disable an unrelated secret |
 | Source missing | Deleted/missing secret; review replica revocation explicitly | Automatically purge destination |
 | Lease contention | Another invocation is working; check retries/DLQ and reconciliation | Remove a live lock blindly |
 | Telemetry missing | AMPLS membership, five DNS-zone registrations, Metrics Publisher, Entra app setting | Reenable public ingestion/query |

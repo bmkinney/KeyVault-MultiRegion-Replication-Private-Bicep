@@ -10,10 +10,11 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src" / "replication"))
 from azure.core.exceptions import HttpResponseError, ResourceNotFoundError
-from replication import NEW_VERSION, Replicator, fingerprint, latest, parse_events
+from replication import NEW_VERSION, Replicator, SecretSelection, fingerprint, latest, parse_events
 
 SOURCE_ID = "/subscriptions/demo/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/source"
 SOURCE_URI = "https://source.vault.azure.net/"
+DESTINATION_ID = "/subscriptions/demo/resourceGroups/rg/providers/Microsoft.KeyVault/vaults/destination"
 VERSION = "a" * 32
 
 
@@ -144,7 +145,10 @@ class ConvergenceTests(unittest.TestCase):
         self.source = Vault()
         self.dest = Vault()
         self.source.secrets["sample"] = SimpleNamespace(properties=properties(), value="synthetic-value")
-        self.worker = Replicator(self.source, self.dest, SOURCE_ID, lock_factory)
+        self.worker = Replicator(
+            self.source, self.dest, SOURCE_ID, lock_factory,
+            SecretSelection([], "", True), DESTINATION_ID,
+        )
 
     def test_value_and_metadata_copied(self):
         self.assertEqual(self.worker.sync("sample"), "replicated")
@@ -275,6 +279,82 @@ class ConvergenceTests(unittest.TestCase):
         with self.assertLogs(level="INFO") as logs:
             self.worker.sync("sample")
         self.assertNotIn("synthetic-value", "\n".join(logs.output))
+
+    def test_unmanaged_collision_does_not_overwrite(self):
+        self.dest.secrets["sample"] = SimpleNamespace(properties=properties(), value="existing")
+        with self.assertRaisesRegex(ValueError, "collision"):
+            self.worker.sync("sample")
+        self.assertEqual(self.dest.writes, 0)
+        self.assertEqual(self.dest.secrets["sample"].value, "existing")
+
+    def test_inactive_source_cannot_disable_unmanaged_collision(self):
+        self.dest.secrets["sample"] = SimpleNamespace(properties=properties(), value="existing")
+        self.source.secrets["sample"].properties.enabled = False
+        with self.assertRaisesRegex(ValueError, "collision"):
+            self.worker.sync("sample")
+        self.assertEqual(self.dest.updates, 0)
+
+    def test_explicit_overwrite_approval(self):
+        self.dest.secrets["sample"] = SimpleNamespace(properties=properties(), value="existing")
+        self.worker.allow_unmanaged_overwrite = True
+        self.worker.sync("sample")
+        self.assertEqual(self.dest.secrets["sample"].value, "synthetic-value")
+
+    def test_another_source_lineage_is_a_collision(self):
+        self.dest.secrets["sample"] = SimpleNamespace(
+            properties=properties(tags={"mrkv_source": "another-source"}), value="existing"
+        )
+        with self.assertRaisesRegex(ValueError, "collision"):
+            self.worker.sync("sample")
+
+    def test_promoted_replica_can_update_its_original_source(self):
+        self.source.secrets["sample"].properties.tags.update({
+            "mrkv_source": DESTINATION_ID.lower(),
+            "mrkv_version": VERSION,
+            "mrkv_fingerprint": fingerprint(properties()),
+        })
+        self.dest.secrets["sample"] = SimpleNamespace(properties=properties(), value="original")
+        self.worker.sync("sample")
+        self.assertEqual(self.dest.secrets["sample"].value, "synthetic-value")
+
+    def test_unselected_secret_is_not_read_or_written(self):
+        self.worker.selection = SecretSelection(["different"], "", False)
+        with patch.object(self.source, "get_secret") as get:
+            self.assertEqual(self.worker.sync("sample"), "excluded")
+            get.assert_not_called()
+        self.assertEqual(self.dest.writes, 0)
+
+    def test_reconciliation_ignores_unselected_destination_secrets(self):
+        self.worker.selection = SecretSelection(["sample"], "", False)
+        self.dest.secrets["other"] = SimpleNamespace(properties=properties("other"), value="existing")
+        with patch("replication.report") as report:
+            self.worker.reconcile()
+            self.assertFalse(any(
+                call.args == ("destination_only",) and call.kwargs.get("secret") == "other"
+                for call in report.call_args_list
+            ))
+
+
+class SelectionTests(unittest.TestCase):
+    def test_names_and_prefix_are_case_insensitive_union(self):
+        selection = SecretSelection(["Sample"], "APP-", False)
+        self.assertTrue(selection.includes("sample"))
+        self.assertTrue(selection.includes("app-password"))
+        self.assertFalse(selection.includes("unrelated"))
+
+    def test_empty_selection_fails_closed(self):
+        with self.assertRaises(ValueError):
+            SecretSelection([], "", False)
+
+    def test_all_requires_explicit_boolean(self):
+        self.assertTrue(SecretSelection([], "", True).includes("any-secret"))
+        with self.assertRaises(ValueError):
+            SecretSelection([], "", "true")
+
+    def test_invalid_selection_rejected(self):
+        for names, prefix in [("sample", ""), ([1], ""), (["invalid/name"], ""), ([], "*")]:
+            with self.subTest(names=names, prefix=prefix), self.assertRaises(ValueError):
+                SecretSelection(names, prefix, False)
 
 
 if __name__ == "__main__":

@@ -46,6 +46,12 @@ required. Action groups without recipients do not deliver notifications.
 
 ## Promotion to Central US
 
+Preserve the same name selection in both directions. Destination collision
+protection stays enabled: a recognized replica/original-source lineage permits
+normal recovery, but independently modified or unmanaged destination secrets
+require a separate conflict review. Do not turn on broad unmanaged overwrite
+to silence a recovery failure. See [existing-vault safeguards](existing-vaults.md).
+
 1. Declare the incident, obtain promotion approval, and record last confirmed
    synchronization time and estimated unreplicated changes.
 2. Fence application writers to East US. Revoke or suspend their write permission
@@ -119,6 +125,10 @@ No cleanup script automatically deletes resources or secrets. For an approved
 teardown, stop workers, fence writers, preserve required backup/recovery records,
 disconnect workspaces/Insights from AMPLS before deleting monitoring resources,
 and delete only the explicitly identified deployment resource groups.
+
+When reusing vaults or system topics, exclude their resource groups from cleanup.
+Even an `existing` Bicep reference cannot protect a vault if an operator deletes
+its containing group. Remove only approved integration resources in shared groups.
 
 Soft-deleted vault names remain reserved. Recovering a vault does not restore
 its RBAC assignments/Event Grid integrations; restore those through reviewed

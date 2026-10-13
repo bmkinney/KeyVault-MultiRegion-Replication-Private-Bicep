@@ -7,9 +7,20 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 Get-Command az -ErrorAction Stop | Out-Null
+Get-Command python -ErrorAction Stop | Out-Null
 $ParametersFile = (Resolve-Path $ParametersFile).Path
 $Template = (Resolve-Path "$PSScriptRoot\..\infra\main.bicep").Path
 $Name = 'mrkv-infrastructure'
+
+$CompiledParameters = [System.IO.Path]::GetTempFileName()
+try {
+    & az bicep build-params --file $ParametersFile --outfile $CompiledParameters --only-show-errors
+    if ($LASTEXITCODE -ne 0) { throw 'Parameter compilation failed; no deployment attempted.' }
+    & python "$PSScriptRoot\check_vault_integration.py" --parameters $CompiledParameters --subscription $SubscriptionId
+    if ($LASTEXITCODE -ne 0) { throw 'Vault integration preflight failed; no deployment attempted.' }
+} finally {
+    Remove-Item -LiteralPath $CompiledParameters -Force
+}
 
 & az deployment sub validate --subscription $SubscriptionId --location $DeploymentLocation `
     --name $Name --template-file $Template --parameters $ParametersFile --only-show-errors

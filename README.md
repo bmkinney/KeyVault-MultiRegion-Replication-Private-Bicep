@@ -26,6 +26,8 @@ The same notice is available in [DISCLAIMER.md](DISCLAIMER.md).
 - [Azure Portal deployment](docs/deployment-portal.md): manually reproduce the
   same infrastructure and identity configuration without Bicep.
 - [Architecture and limitations](docs/architecture.md).
+- [Use existing Key Vaults](docs/existing-vaults.md): independent new/existing selection,
+  source filters, preserved vault settings, and protected destination collisions.
 - [Operating, promoting, and recovering](docs/operations.md).
 - [Troubleshooting](docs/troubleshooting.md).
 - [Approved decisions](docs/architecture-decisions.md) and [Microsoft references](docs/references.md).
@@ -37,7 +39,7 @@ The same notice is available in [DISCLAIMER.md](DISCLAIMER.md).
 | --- | --- |
 | Compute | Two Linux Python 3.12 Flex Consumption apps |
 | Authority | One writer at a time; manually fenced promotion/failback |
-| Replication | Current secret value, content type, supported dates, enabled state, and user tags |
+| Replication | Selected current secret values/properties; unmanaged destination collisions rejected by default |
 | Recovery | Initial/periodic reconciliation every five minutes; retry-safe lineage |
 | Networking | Isolated VNets, local endpoints to both vaults, private storage/messaging/app access |
 | Telemetry | Regional Log Analytics/Application Insights and private-only AMPLS |

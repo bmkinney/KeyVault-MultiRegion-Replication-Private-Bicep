@@ -38,6 +38,11 @@ deployment is not evidence that every data-plane permission is ready.
 
 ## 2. Configure initial parameters
 
+For existing vaults, follow [existing-vault integration](existing-vaults.md) and
+start with `infra\parameters\existing-vaults.example.bicepparam`. The deployment
+script performs read-only compatibility and topic-reuse preflight; Python must
+be available. Leave vault IDs empty to retain new-vault behavior.
+
 Edit `infra\parameters\example.bicepparam` or create your own local parameter file.
 Set a real `alertEmail` before operational use. Do not commit personal recipients
 if your organization treats them as private information.
@@ -66,9 +71,9 @@ and confirm no unrelated resource is changed. Then, if approved:
 .\scripts\Deploy.ps1 -SubscriptionId '<subscription-id>' -Apply
 ```
 
-Do not reuse names of preexisting vaults to "adopt" them. This template creates
-new resources. Use a separately reviewed `existing`-resource integration for
-preexisting infrastructure.
+Do not reuse names to "adopt" preexisting vaults. Supply their full resource IDs
+through the explicit existing-vault parameters instead. Existing resources are
+referenced without redeploying their properties.
 
 If this deployment partially fails, preserve the subscription, workload name,
 parameter file, deployment name/location, and authority settings. Review a new

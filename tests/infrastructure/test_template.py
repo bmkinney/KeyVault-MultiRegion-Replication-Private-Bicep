@@ -121,6 +121,63 @@ class InfrastructureTests(unittest.TestCase):
         self.assertFalse(TEMPLATE["parameters"]["enableWorker"]["defaultValue"])
         self.assertFalse(TEMPLATE["parameters"]["enableEventRouting"]["defaultValue"])
         self.assertEqual(TEMPLATE["parameters"]["authoritativeRegion"]["allowedValues"], ["primary", "secondary"])
+        self.assertFalse(TEMPLATE["parameters"]["allowUnmanagedOverwrite"]["defaultValue"])
+
+    def test_existing_vaults_are_references_not_deployed_resources(self):
+        for vault in of_type("Microsoft.KeyVault/vaults"):
+            self.assertEqual(vault["condition"], "[empty(parameters('existingVaultResourceId'))]")
+        foundations = [
+            resource for resource in TEMPLATE["resources"]
+            if resource["type"] == "Microsoft.Resources/deployments" and resource["name"].endswith("-foundation")
+        ]
+        self.assertEqual(len(foundations), 2)
+        for foundation in foundations:
+            side = foundation["name"].split("-")[0]
+            self.assertEqual(
+                foundation["properties"]["parameters"]["existingVaultResourceId"]["value"],
+                f"[parameters('{side}VaultResourceId')]",
+            )
+            for diagnostics in foundation["properties"]["template"]["resources"]:
+                if diagnostics["type"] == "Microsoft.Insights/diagnosticSettings" and "Microsoft.KeyVault/vaults" in diagnostics.get("scope", ""):
+                    self.assertEqual(diagnostics["condition"], "[empty(parameters('existingVaultResourceId'))]")
+        for primary_id, secondary_id, expected_creates in [
+            ("", "", 2), ("/existing-primary", "", 1),
+            ("", "/existing-secondary", 1), ("/existing-primary", "/existing-secondary", 0),
+        ]:
+            creates = 0
+            for foundation in foundations:
+                selected_id = primary_id if foundation["name"] == "primary-foundation" else secondary_id
+                for resource in foundation["properties"]["template"]["resources"]:
+                    if resource["type"] != "Microsoft.KeyVault/vaults":
+                        continue
+                    condition = resource["condition"]
+                    self.assertRegex(condition, r"^\[empty\(parameters\('existingVaultResourceId'\)\)\]$")
+                    creates += not bool(selected_id)
+            self.assertEqual(creates, expected_creates)
+        for deployment in TEMPLATE["resources"]:
+            if deployment["type"] == "Microsoft.Resources/deployments" and deployment["name"].endswith("-vault-access"):
+                side = deployment["name"].split("-")[0]
+                self.assertIn(f"split(parameters('{side}VaultResourceId'), '/')", deployment["resourceGroup"])
+
+    def test_existing_topics_are_not_recreated_or_reconfigured(self):
+        for topic in of_type("Microsoft.EventGrid/systemTopics"):
+            self.assertEqual(topic["condition"], "[empty(parameters('existingSystemTopicResourceId'))]")
+        routes = [
+            resource for resource in TEMPLATE["resources"]
+            if resource["type"] == "Microsoft.Resources/deployments" and resource["name"].endswith("-routing")
+        ]
+        for route in routes:
+            side = route["name"].split("-")[0]
+            self.assertIn(f"split(parameters('{side}SystemTopicResourceId'), '/')", route["resourceGroup"])
+
+    def test_worker_selection_and_collision_settings_are_wired(self):
+        for app in of_type("Microsoft.Web/sites"):
+            settings = {item["name"]: item["value"] for item in app["properties"]["siteConfig"]["appSettings"]}
+            self.assertEqual(settings["SECRET_NAMES"], "[string(parameters('secretNames'))]")
+            self.assertEqual(settings["SECRET_PREFIX"], "[parameters('secretPrefix')]")
+            self.assertEqual(settings["REPLICATE_ALL_SECRETS"], "[string(parameters('replicateAllSecrets'))]")
+            self.assertEqual(settings["ALLOW_UNMANAGED_OVERWRITE"], "[string(parameters('allowUnmanagedOverwrite'))]")
+            self.assertEqual(settings["DESTINATION_VAULT_ID"], "[parameters('destinationVaultId')]")
 
     def test_event_delivery_and_deadletter_are_identity_based(self):
         subscriptions = of_type("Microsoft.EventGrid/systemTopics/eventSubscriptions")

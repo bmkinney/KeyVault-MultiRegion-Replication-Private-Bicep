@@ -72,6 +72,11 @@ writer fencing are operational actions, not automatic DNS failover.
 
 ## Independent regional stamps
 
+Each depicted vault may instead be an existing same-subscription vault in another
+resource group. [Existing-vault integration](existing-vaults.md) preserves its
+configuration and existing topic/diagnostic integrations. The Private Link
+topology is unchanged; configured regional locations must match the selected vaults.
+
 | Resource | East US | Central US |
 | --- | --- | --- |
 | VNet | `10.35.0.0/16` | `10.36.0.0/16` |
@@ -163,7 +168,13 @@ secret URLs are not valid on the replica. Applications should use the configured
 vault URI and an appropriate version-independent secret reference.
 
 The worker copies value, content type, not-before/expiry dates, enabled state,
-and user tags for readable current secrets. For disabled, expired, or future
+and user tags for selected readable current secrets. Name allowlists and prefixes
+apply to events and reconciliation, including destination-only alerts. Selecting
+all secrets from a reused vault requires explicit opt-in. An unmanaged destination
+name collision raises an error without overwriting or disabling it unless the
+operator explicitly approves replacement for the selected names.
+
+For disabled, expired, or future
 secrets, it disables an existing destination rather than publishing unavailable
 material. If no replica exists, it reports `source_inactive`; the value cannot
 be backfilled until it is readable. Source deletion is reported, not propagated.

@@ -94,3 +94,30 @@ monitor associations. The earlier eight assertions did not cover these provider
 requirements. The corrected main template compiles with exit 0, and all 10
 compiled-infrastructure assertions pass. No deployment retry or live remediation
 is performed by this fix; end-to-end deployment success remains unverified.
+
+## Existing-vault integration (2026-10-13)
+
+Added same-subscription vault/topic references, actual-resource-group IAM/event
+scopes, read-only compatibility preflight, source allowlist/prefix selection,
+and unmanaged destination collision protection. Existing vault/topic properties
+and diagnostics are not redeployed. The Portal fallback was regenerated.
+
+Local results:
+
+| Check | Result |
+| --- | --- |
+| Main Bicep, new/existing parameter examples, Portal fallback | Compilation exit 0 |
+| Runtime/preflight unit tests | 62 passed |
+| Compiled infrastructure assertions | 13 passed, including four new/existing combinations |
+| PowerShell deployment/publication/test scripts | Parse successfully |
+| Azure CLI Python runner on Windows | Local version query passed; no live cloud query |
+| Unsuppressed Checkov | 59 passed, 14 failed, 0 skipped, 0 parsing errors; exit 1 |
+
+The scanner findings remain the same seven rule IDs described above. No findings
+were suppressed and no clean/security-severity clearance is claimed. The unit
+tests mock existing Azure resources; no existing vault was inventoried, changed,
+or live-integrated during implementation. Endpoint approval, existing-topic
+delivery, subscription policy, and collision/failover exercises remain live gates.
+
+Completion self-check: local compilation **PASS**; secure defaults and preservation
+assertions **PASS**; Checkov **REVIEWED, NOT CLEAN**; live integration **PENDING**.

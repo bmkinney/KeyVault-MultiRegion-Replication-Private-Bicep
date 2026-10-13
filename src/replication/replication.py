@@ -19,6 +19,27 @@ MARKER_PREFIX = "mrkv_"
 NAME_PATTERN = re.compile(r"^[a-zA-Z0-9-]{1,127}$")
 VERSION_PATTERN = re.compile(r"^[a-fA-F0-9]{32}$")
 
+class SecretSelection:
+    def __init__(self, names: list[str], prefix: str, all_secrets: bool):
+        if not isinstance(names, list) or any(
+            not isinstance(name, str) or not NAME_PATTERN.fullmatch(name) for name in names
+        ):
+            raise ValueError("Secret selection names must be valid Key Vault secret names")
+        if not isinstance(prefix, str) or (prefix and not NAME_PATTERN.fullmatch(prefix)):
+            raise ValueError("Secret prefix must contain only letters, numbers, and hyphens")
+        if not isinstance(all_secrets, bool):
+            raise ValueError("Whole-vault selection must be a boolean")
+        if not all_secrets and not names and not prefix:
+            raise ValueError("Select secret names, a prefix, or explicitly opt into all secrets")
+        self.names = {name.lower() for name in names}
+        self.prefix = prefix.lower()
+        self.all_secrets = all_secrets
+
+    def includes(self, name: str) -> bool:
+        return self.all_secrets or name.lower() in self.names or (
+            bool(self.prefix) and name.lower().startswith(self.prefix)
+        )
+
 
 def report(outcome: str, **fields: Any) -> None:
     message = "MRKV " + json.dumps({"outcome": outcome, **fields}, separators=(",", ":"))
@@ -117,15 +138,40 @@ def latest(client: Any, name: str) -> tuple[Any, Any]:
 
 
 class Replicator:
-    def __init__(self, source: Any, destination: Any, source_id: str, lock_factory: Callable):
+    def __init__(
+        self, source: Any, destination: Any, source_id: str, lock_factory: Callable,
+        selection: SecretSelection, destination_id: str, allow_unmanaged_overwrite: bool = False,
+    ):
         self.source = source
         self.destination = destination
         self.source_id = source_id.lower()
         self.lock_factory = lock_factory
+        self.selection = selection
+        self.destination_id = destination_id.lower()
+        self.allow_unmanaged_overwrite = allow_unmanaged_overwrite
+
+    def _managed_destination(self, source_properties: Any, dest_properties: Any) -> bool:
+        destination_tags = dest_properties.tags or {}
+        source_tags = source_properties.tags or {}
+        if (
+            destination_tags.get("mrkv_source", "").lower() == self.source_id
+            and VERSION_PATTERN.fullmatch(destination_tags.get("mrkv_version", ""))
+            and destination_tags.get("mrkv_fingerprint")
+        ):
+            return True
+        # A promoted replica may copy back to its original, still-unmarked source.
+        return (
+            source_tags.get("mrkv_source", "").lower() == self.destination_id
+            and source_tags.get("mrkv_version") == dest_properties.version
+            and source_tags.get("mrkv_fingerprint") == fingerprint(dest_properties)
+        )
 
     def sync(self, name: str) -> str:
         if not NAME_PATTERN.fullmatch(name):
             raise ValueError("Invalid secret name")
+        if not self.selection.includes(name):
+            report("excluded", secret=name)
+            return "excluded"
         with self.lock_factory(name.lower()) as lock:
             try:
                 properties, value = latest(self.source, name)
@@ -139,6 +185,13 @@ class Replicator:
                 dest_properties, _ = latest(self.destination, name)
             except ResourceNotFoundError:
                 dest_properties = None
+            if (
+                dest_properties is not None
+                and not self._managed_destination(properties, dest_properties)
+                and not self.allow_unmanaged_overwrite
+            ):
+                report("failure", secret=name, stage="unmanaged_destination_collision")
+                raise ValueError("Destination name collision requires explicit overwrite approval")
             now = datetime.now(timezone.utc)
             inactive = (
                 properties.enabled is False
@@ -199,6 +252,8 @@ class Replicator:
         failures = 0
         source_names = set()
         for properties in self.source.list_properties_of_secrets():
+            if not self.selection.includes(properties.name):
+                continue
             source_names.add(properties.name.lower())
             try:
                 self.sync(properties.name)
@@ -206,7 +261,7 @@ class Replicator:
                 failures += 1
                 report("failure", secret=properties.name, stage="reconciliation")
         for properties in self.destination.list_properties_of_secrets():
-            if properties.name.lower() not in source_names:
+            if self.selection.includes(properties.name) and properties.name.lower() not in source_names:
                 report("destination_only", secret=properties.name)
         report("reconciliation_complete", secretCount=len(source_names), failures=failures)
         if failures:
