@@ -46,7 +46,10 @@ Approved through interactive clarification on 2026-10-09.
 ## Not yet selected or verified
 
 Target subscription, actual quotas, policy effects, notification recipient,
-private publishing workstation/runner connectivity, production SLOs, and license.
+private publishing workstation/runner connectivity, and production SLOs.
+The repository is illustration-only and subject to the
+[sample code disclaimer](../DISCLAIMER.md); these pending decisions do not
+imply suitability for production.
 No public IP, VPN gateway, Bastion, firewall, paid runner, or GitHub remote is
 implicitly provisioned. Connectivity to both regional management networks is
 a deployment prerequisite, not an undocumented third regional dependency.
