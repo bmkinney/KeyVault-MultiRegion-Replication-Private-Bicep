@@ -10,6 +10,10 @@ param network object
 param alertEmail string
 @description('Resource tags.')
 param tags object
+@description('Same-subscription existing vault ARM ID; empty creates a new vault.')
+param existingVaultResourceId string = ''
+@description('Existing system topic ARM ID; empty creates a dedicated topic if none exists.')
+param existingSystemTopicResourceId string = ''
 
 resource vnet 'Microsoft.Network/virtualNetworks@2025-05-01' = {
   name: 'vnet-${prefix}'
@@ -83,7 +87,7 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' 
   tags: tags
 }
 
-resource vault 'Microsoft.KeyVault/vaults@2026-02-01' = {
+resource vault 'Microsoft.KeyVault/vaults@2026-02-01' = if (empty(existingVaultResourceId)) {
   name: 'kv-${prefix}'
   location: location
   tags: tags
@@ -107,6 +111,14 @@ resource vault 'Microsoft.KeyVault/vaults@2026-02-01' = {
     }
   }
 }
+
+resource referencedVault 'Microsoft.KeyVault/vaults@2026-02-01' existing = if (!empty(existingVaultResourceId)) {
+  name: last(split(existingVaultResourceId, '/'))
+  scope: resourceGroup(empty(existingVaultResourceId) ? resourceGroup().name : split(existingVaultResourceId, '/')[4])
+}
+
+var selectedVaultId = empty(existingVaultResourceId) ? vault!.id : referencedVault!.id
+var selectedVaultUri = empty(existingVaultResourceId) ? vault!.properties.vaultUri : referencedVault!.properties.vaultUri
 
 var accountNames = ['st${storageToken}run', 'st${storageToken}dl']
 resource accounts 'Microsoft.Storage/storageAccounts@2025-06-01' = [for (accountName, index) in accountNames: {
@@ -237,7 +249,7 @@ resource receiver 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
   }
 }
 
-resource topic 'Microsoft.EventGrid/systemTopics@2025-02-15' = {
+resource topic 'Microsoft.EventGrid/systemTopics@2025-02-15' = if (empty(existingSystemTopicResourceId)) {
   name: 'evgt-${prefix}'
   location: location
   tags: tags
@@ -245,26 +257,34 @@ resource topic 'Microsoft.EventGrid/systemTopics@2025-02-15' = {
     type: 'SystemAssigned'
   }
   properties: {
-    source: vault.id
+    source: selectedVaultId
     topicType: 'Microsoft.KeyVault.vaults'
   }
 }
 
+resource referencedTopic 'Microsoft.EventGrid/systemTopics@2025-02-15' existing = if (!empty(existingSystemTopicResourceId)) {
+  name: last(split(existingSystemTopicResourceId, '/'))
+  scope: resourceGroup(empty(existingSystemTopicResourceId) ? resourceGroup().name : split(existingSystemTopicResourceId, '/')[4])
+}
+
+var selectedTopicId = empty(existingSystemTopicResourceId) ? topic!.id : referencedTopic!.id
+var selectedTopicPrincipal = empty(existingSystemTopicResourceId) ? topic!.identity.principalId : referencedTopic!.identity.principalId
+
 resource sender 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(bus.id, topic.id, 'sender')
+  name: guid(bus.id, selectedTopicId, 'sender')
   scope: bus
   properties: {
-    principalId: topic.identity.principalId
+    principalId: selectedTopicPrincipal
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39')
   }
 }
 
 resource deadletterWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(accounts[1].id, topic.id, 'blob-writer')
+  name: guid(accounts[1].id, selectedTopicId, 'blob-writer')
   scope: accounts[1]
   properties: {
-    principalId: topic.identity.principalId
+    principalId: selectedTopicPrincipal
     principalType: 'ServicePrincipal'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
   }
@@ -399,7 +419,7 @@ resource eventFailureAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
     description: 'Event Grid could not deliver events to Service Bus.'
     severity: 1
     enabled: true
-    scopes: [topic.id]
+    scopes: [selectedTopicId]
     evaluationFrequency: 'PT1M'
     windowSize: 'PT5M'
     criteria: {
@@ -420,7 +440,7 @@ resource eventFailureAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
   }
 }
 
-resource vaultDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource vaultDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (empty(existingVaultResourceId)) {
   name: 'workspace'
   scope: vault
   properties: {
@@ -440,7 +460,7 @@ resource busDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-previe
   }
 }
 
-resource topicDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
+resource topicDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (empty(existingSystemTopicResourceId)) {
   name: 'workspace'
   scope: topic
   properties: {
@@ -459,9 +479,10 @@ resource blobDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-previ
   }
 }]
 
-output vaultId string = vault.id
-output vaultName string = vault.name
-output vaultUri string = vault.properties.vaultUri
+output vaultId string = selectedVaultId
+output vaultName string = empty(existingVaultResourceId) ? vault!.name : referencedVault!.name
+output vaultUri string = selectedVaultUri
+output vaultResourceGroup string = empty(existingVaultResourceId) ? resourceGroup().name : split(existingVaultResourceId, '/')[4]
 output principalId string = identity.properties.principalId
 output clientId string = identity.properties.clientId
 output storageId string = accounts[0].id
@@ -470,7 +491,8 @@ output deadletterStorageId string = accounts[1].id
 output serviceBusId string = bus.id
 output serviceBusName string = bus.name
 output queueId string = queue.id
-output topicName string = topic.name
+output topicName string = empty(existingSystemTopicResourceId) ? topic!.name : referencedTopic!.name
+output topicResourceGroup string = empty(existingSystemTopicResourceId) ? resourceGroup().name : split(existingSystemTopicResourceId, '/')[4]
 output monitorScopeId string = monitor.id
 output endpointSubnetId string = '${vnet.id}/subnets/endpoints'
 output zoneIds object = toObject(zoneList, zone => zone.key, zone => resourceId('Microsoft.Network/privateDnsZones', zone.value))

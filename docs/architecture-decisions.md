@@ -14,6 +14,9 @@ Approved through interactive clarification on 2026-10-09.
 | Objectives | 60-second healthy replication; 30-minute manual recovery; five-minute reconciliation | Demo acceptance targets, not service guarantees |
 | Size | 100 secrets, 10 updates/minute | Bounded demo workload |
 | Provenance | Original implementation with attribution | No copying from an upstream clone without a license |
+| Existing vaults | Independent new/existing selection within the subscription | Preserve settings; scoped integration resources only |
+| Source selection for reused vaults | Explicit name allowlist/prefix or whole-vault opt-in | Avoid accidental copying from shared vaults |
+| Destination collisions | Reject unmanaged names unless replacement is explicitly approved | Preserve existing unrelated contents |
 
 ## Implementation refinements
 

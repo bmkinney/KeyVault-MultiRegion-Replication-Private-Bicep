@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "16807347445971771806"
+      "templateHash": "11278184407635366352"
     }
   },
   "parameters": {
@@ -43,6 +43,40 @@
       "type": "string",
       "metadata": {
         "description": "Destination vault URI."
+      }
+    },
+    "destinationVaultId": {
+      "type": "string",
+      "metadata": {
+        "description": "Destination vault ARM ID for collision lineage validation."
+      }
+    },
+    "secretNames": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Explicit name allowlist."
+      }
+    },
+    "secretPrefix": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Selected name prefix."
+      }
+    },
+    "replicateAllSecrets": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Whole-vault replication opt-in."
+      }
+    },
+    "allowUnmanagedOverwrite": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Explicit unmanaged destination overwrite approval."
       }
     },
     "enabled": {
@@ -145,6 +179,26 @@
             {
               "name": "DESTINATION_VAULT_URI",
               "value": "[parameters('destinationVaultUri')]"
+            },
+            {
+              "name": "DESTINATION_VAULT_ID",
+              "value": "[parameters('destinationVaultId')]"
+            },
+            {
+              "name": "SECRET_NAMES",
+              "value": "[string(parameters('secretNames'))]"
+            },
+            {
+              "name": "SECRET_PREFIX",
+              "value": "[parameters('secretPrefix')]"
+            },
+            {
+              "name": "REPLICATE_ALL_SECRETS",
+              "value": "[string(parameters('replicateAllSecrets'))]"
+            },
+            {
+              "name": "ALLOW_UNMANAGED_OVERWRITE",
+              "value": "[string(parameters('allowUnmanagedOverwrite'))]"
             },
             {
               "name": "COORDINATION_BLOB_URI",

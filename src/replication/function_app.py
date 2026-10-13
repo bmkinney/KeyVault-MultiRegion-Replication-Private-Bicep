@@ -1,4 +1,5 @@
 import logging
+import json
 import os
 from functools import lru_cache
 
@@ -8,7 +9,7 @@ from azure.keyvault.secrets import SecretClient
 from azure.storage.blob import BlobServiceClient
 
 from coordination import BlobLock
-from replication import EXPIRY_EVENTS, Replicator, parse_events, report
+from replication import EXPIRY_EVENTS, Replicator, SecretSelection, parse_events, report
 
 app = func.FunctionApp()
 
@@ -23,6 +24,20 @@ def required(name: str) -> str:
 def ensure_enabled() -> None:
     if required("REPLICATION_ENABLED").lower() != "true":
         raise RuntimeError("Worker is fenced; its triggers must also be disabled")
+
+def boolean_setting(name: str) -> bool:
+    value = required(name).lower()
+    if value not in {"true", "false"}:
+        raise ValueError(f"{name} must be true or false")
+    return value == "true"
+
+
+def selection() -> SecretSelection:
+    return SecretSelection(
+        json.loads(required("SECRET_NAMES")),
+        os.environ.get("SECRET_PREFIX", ""),
+        boolean_setting("REPLICATE_ALL_SECRETS"),
+    )
 
 
 @lru_cache(maxsize=1)
@@ -42,6 +57,8 @@ def worker() -> Replicator:
     return Replicator(
         source, destination, required("SOURCE_VAULT_ID"),
         lambda name: BlobLock(container, name),
+        selection(), required("DESTINATION_VAULT_ID"),
+        boolean_setting("ALLOW_UNMANAGED_OVERWRITE"),
     )
 
 
@@ -59,6 +76,9 @@ def replicate(message: func.ServiceBusMessage) -> None:
         )
         for event in events:
             name = event["data"]["ObjectName"]
+            if not selection().includes(name):
+                report("excluded", secret=name)
+                continue
             if event["eventType"] in EXPIRY_EVENTS:
                 report(EXPIRY_EVENTS[event["eventType"]], secret=name)
             worker().sync(name)

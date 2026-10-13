@@ -38,6 +38,7 @@ certify this custom application's behavior. Local and live tests are separate.
 | AMPLS resources and endpoint setup | [AMPLS configuration](https://learn.microsoft.com/en-us/azure/azure-monitor/fundamentals/private-link-configure) |
 | AMPLS association resource kind for the selected API | [Scoped resources 2023-06-01-preview](https://learn.microsoft.com/en-us/azure/templates/microsoft.insights/2023-06-01-preview/privatelinkscopes/scopedresources) |
 | Subscription deployments and cross-group modules | [Subscription-scope Bicep](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/deploy-to-subscription) |
+| Reference vaults/topics without recreating them | [Existing resources](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/existing-resource) |
 | Resource name constraints | [Name rules](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules) |
 
 ## Well-Architected review

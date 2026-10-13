@@ -11,6 +11,31 @@ param primaryLocation string = 'eastus'
 @description('Secondary region.')
 param secondaryLocation string = 'centralus'
 
+@description('Existing primary vault ARM ID in this subscription; empty creates a vault.')
+param primaryVaultResourceId string = ''
+
+@description('Existing secondary vault ARM ID in this subscription; empty creates a vault.')
+param secondaryVaultResourceId string = ''
+
+@description('Existing system topic for the primary vault; preflight requires reuse when one exists.')
+param primarySystemTopicResourceId string = ''
+
+@description('Existing system topic for the secondary vault.')
+param secondarySystemTopicResourceId string = ''
+
+@description('Case-insensitive explicit secret-name allowlist. Combined with prefix by union.')
+param secretNames array = []
+
+@description('Case-insensitive secret-name prefix; empty does not select anything.')
+#disable-next-line secure-secrets-in-params // Name filter, never a secret value.
+param secretPrefix string = ''
+
+@description('Explicit whole-vault opt-in. Defaults true only when both vaults are new.')
+param replicateAllSecrets bool = empty(primaryVaultResourceId) && empty(secondaryVaultResourceId)
+
+@description('Explicit approval to replace/disable unmanaged destination secrets within the selection.')
+param allowUnmanagedOverwrite bool = false
+
 @description('Primary VNet, integration subnet, and private endpoint subnet CIDRs.')
 param primaryNetwork object = {
   address: '10.35.0.0/16'
@@ -93,6 +118,8 @@ module primary './modules/foundation.bicep' = {
     network: primaryNetwork
     alertEmail: alertEmail
     tags: tags
+    existingVaultResourceId: primaryVaultResourceId
+    existingSystemTopicResourceId: primarySystemTopicResourceId
   }
 }
 
@@ -106,12 +133,14 @@ module secondary './modules/foundation.bicep' = {
     network: secondaryNetwork
     alertEmail: alertEmail
     tags: tags
+    existingVaultResourceId: secondaryVaultResourceId
+    existingSystemTopicResourceId: secondarySystemTopicResourceId
   }
 }
 
 module primaryVaultAccess './modules/vault-access.bicep' = {
   name: 'primary-vault-access'
-  scope: primaryGroup
+  scope: resourceGroup(empty(primaryVaultResourceId) ? primaryGroup.name : split(primaryVaultResourceId, '/')[4])
   params: {
     vaultName: primary.outputs.vaultName
     readerPrincipalId: primary.outputs.principalId
@@ -122,7 +151,7 @@ module primaryVaultAccess './modules/vault-access.bicep' = {
 
 module secondaryVaultAccess './modules/vault-access.bicep' = {
   name: 'secondary-vault-access'
-  scope: secondaryGroup
+  scope: resourceGroup(empty(secondaryVaultResourceId) ? secondaryGroup.name : split(secondaryVaultResourceId, '/')[4])
   params: {
     vaultName: secondary.outputs.vaultName
     readerPrincipalId: secondary.outputs.principalId
@@ -177,6 +206,11 @@ module primaryApp './modules/function-app.bicep' = {
     sourceVaultId: primary.outputs.vaultId
     sourceVaultUri: primary.outputs.vaultUri
     destinationVaultUri: secondary.outputs.vaultUri
+    destinationVaultId: secondary.outputs.vaultId
+    secretNames: secretNames
+    secretPrefix: secretPrefix
+    replicateAllSecrets: replicateAllSecrets
+    allowUnmanagedOverwrite: allowUnmanagedOverwrite
     enabled: enableWorker && authoritativeRegion == 'primary'
     tags: tags
   }
@@ -197,6 +231,11 @@ module secondaryApp './modules/function-app.bicep' = {
     sourceVaultId: secondary.outputs.vaultId
     sourceVaultUri: secondary.outputs.vaultUri
     destinationVaultUri: primary.outputs.vaultUri
+    destinationVaultId: primary.outputs.vaultId
+    secretNames: secretNames
+    secretPrefix: secretPrefix
+    replicateAllSecrets: replicateAllSecrets
+    allowUnmanagedOverwrite: allowUnmanagedOverwrite
     enabled: enableWorker && authoritativeRegion == 'secondary'
     tags: tags
   }
@@ -209,12 +248,13 @@ module secondaryApp './modules/function-app.bicep' = {
 
 module primaryRouting './modules/event-routing.bicep' = {
   name: 'primary-routing'
-  scope: primaryGroup
+  scope: resourceGroup(empty(primarySystemTopicResourceId) ? primaryGroup.name : split(primarySystemTopicResourceId, '/')[4])
   params: {
     topicName: primary.outputs.topicName
     queueId: primary.outputs.queueId
     deadletterStorageId: primary.outputs.deadletterStorageId
     enabled: enableEventRouting && authoritativeRegion == 'primary'
+    subscriptionName: empty(primarySystemTopicResourceId) ? 'secret-events' : '${workload}-${token}-secret-events'
   }
   dependsOn: [
     primaryApp
@@ -223,12 +263,13 @@ module primaryRouting './modules/event-routing.bicep' = {
 
 module secondaryRouting './modules/event-routing.bicep' = {
   name: 'secondary-routing'
-  scope: secondaryGroup
+  scope: resourceGroup(empty(secondarySystemTopicResourceId) ? secondaryGroup.name : split(secondarySystemTopicResourceId, '/')[4])
   params: {
     topicName: secondary.outputs.topicName
     queueId: secondary.outputs.queueId
     deadletterStorageId: secondary.outputs.deadletterStorageId
     enabled: enableEventRouting && authoritativeRegion == 'secondary'
+    subscriptionName: empty(secondarySystemTopicResourceId) ? 'secret-events' : '${workload}-${token}-secret-events'
   }
   dependsOn: [
     secondaryApp
@@ -240,6 +281,9 @@ output primaryResources object = {
   functionApp: primaryApp.outputs.name
   vault: primary.outputs.vaultName
   vaultUri: primary.outputs.vaultUri
+  vaultResourceId: primary.outputs.vaultId
+  vaultResourceGroup: primary.outputs.vaultResourceGroup
+  vaultIsExisting: !empty(primaryVaultResourceId)
   storage: primary.outputs.storageName
   serviceBus: primary.outputs.serviceBusName
   identityClientId: primary.outputs.clientId
@@ -250,6 +294,9 @@ output secondaryResources object = {
   functionApp: secondaryApp.outputs.name
   vault: secondary.outputs.vaultName
   vaultUri: secondary.outputs.vaultUri
+  vaultResourceId: secondary.outputs.vaultId
+  vaultResourceGroup: secondary.outputs.vaultResourceGroup
+  vaultIsExisting: !empty(secondaryVaultResourceId)
   storage: secondary.outputs.storageName
   serviceBus: secondary.outputs.serviceBusName
   identityClientId: secondary.outputs.clientId

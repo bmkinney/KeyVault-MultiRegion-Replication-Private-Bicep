@@ -10,6 +10,17 @@ param sourceVaultId string
 param sourceVaultUri string
 @description('Destination vault URI.')
 param destinationVaultUri string
+@description('Destination vault ARM ID for collision lineage validation.')
+param destinationVaultId string
+@description('Explicit name allowlist.')
+param secretNames array = []
+@description('Selected name prefix.')
+#disable-next-line secure-secrets-in-params // Name filter, never a secret value.
+param secretPrefix string = ''
+@description('Whole-vault replication opt-in.')
+param replicateAllSecrets bool = false
+@description('Explicit unmanaged destination overwrite approval.')
+param allowUnmanagedOverwrite bool = false
 @description('Enable replication and reconciliation. Never enable both regional workers.')
 param enabled bool
 @description('Resource tags.')
@@ -63,6 +74,11 @@ resource app 'Microsoft.Web/sites@2025-03-01' = {
         { name: 'SOURCE_VAULT_ID', value: sourceVaultId }
         { name: 'SOURCE_VAULT_URI', value: sourceVaultUri }
         { name: 'DESTINATION_VAULT_URI', value: destinationVaultUri }
+        { name: 'DESTINATION_VAULT_ID', value: destinationVaultId }
+        { name: 'SECRET_NAMES', value: string(secretNames) }
+        { name: 'SECRET_PREFIX', value: secretPrefix }
+        { name: 'REPLICATE_ALL_SECRETS', value: string(replicateAllSecrets) }
+        { name: 'ALLOW_UNMANAGED_OVERWRITE', value: string(allowUnmanagedOverwrite) }
         { name: 'COORDINATION_BLOB_URI', value: foundation.storageBlobUri }
         { name: 'REPLICATION_ENABLED', value: string(enabled) }
         { name: 'AzureWebJobs.Replicate.Disabled', value: string(!enabled) }

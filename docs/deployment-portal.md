@@ -77,6 +77,10 @@ sets of AMPLS zones to the same resolver.
 
 ## 3. Create vaults
 
+To reuse one or both vaults, follow [existing-vault integration](existing-vaults.md)
+instead of creating those resources. Preserve their configuration and diagnostic
+settings, and use their actual IDs/URIs for endpoints, IAM, events, and workers.
+
 Create one Standard vault per region. On access configuration choose **Azure
 role-based access control**. Enable purge protection and 90-day soft-delete
 retention. Do not enable VM deployment, disk encryption, or ARM template
@@ -179,7 +183,10 @@ alerts against the foundation you created manually. It is generated from this
 repository's original Function App module, not exported from a deployed resource.
 
 Use the existing regional resource group. Set `prefix`, `location`, source/destination
-vault settings, `enabled = false`, and `tags`. In **Edit parameters**, populate
+vault settings (including `destinationVaultId`), `enabled = false`, and `tags`.
+Set `secretNames`/`secretPrefix`, or explicitly set `replicateAllSecrets = true`
+for the complete new-vault demo. Keep `allowUnmanagedOverwrite = false`.
+In **Edit parameters**, populate
 the `foundation` object with the following existing values:
 
 ```json
@@ -219,6 +226,11 @@ In Configuration/Environment variables, configure:
 | `SOURCE_VAULT_ID` | Primary vault ARM ID | Secondary vault ARM ID |
 | `SOURCE_VAULT_URI` | Primary URI | Secondary URI |
 | `DESTINATION_VAULT_URI` | Secondary URI | Primary URI |
+| `DESTINATION_VAULT_ID` | Secondary vault ARM ID | Primary vault ARM ID |
+| `SECRET_NAMES` | JSON allowlist, e.g. `["application-password"]` | Same selection |
+| `SECRET_PREFIX` | Optional name prefix (empty selects nothing) | Same selection |
+| `REPLICATE_ALL_SECRETS` | `false`; explicitly use `true` only to select all secrets | Same selection |
+| `ALLOW_UNMANAGED_OVERWRITE` | `false` | `false` |
 | `COORDINATION_BLOB_URI` | Local runtime Blob HTTPS URI | Local runtime Blob HTTPS URI |
 | `APPLICATIONINSIGHTS_CONNECTION_STRING` | Local Insights connection string | Local Insights connection string |
 | `APPLICATIONINSIGHTS_AUTHENTICATION_STRING` | `ClientId=<local-client-id>;Authorization=AAD` | Same format |
@@ -264,6 +276,11 @@ does not require Bicep. Verify both functions are discovered.
 
 ## 9. Create Event Grid system topics and subscriptions
 
+If a selected vault already has a system topic, reuse it rather than creating
+another, and use a distinct replication subscription name. Preserve its existing
+identity configuration/subscriptions; system-assigned delivery identity must
+already be enabled. See [existing-topic handling](existing-vaults.md#existing-event-grid-topics).
+
 Create a system topic for each vault, in that vault's region and subscription,
 type **Microsoft.KeyVault.vaults**. Enable a system-assigned managed identity.
 Assign it **Azure Service Bus Data Sender** on its local namespace and
@@ -275,6 +292,7 @@ Create `secret-events` under each system topic:
 | Control | Value |
 | --- | --- |
 | Schema | Event Grid schema (not CloudEvents) |
+| Labels | `mrkv-replication` |
 | Event types | SecretNewVersionCreated, SecretNearExpiry, SecretExpired |
 | Destination | Local Service Bus queue `kv-events` |
 | Delivery identity | System assigned |
