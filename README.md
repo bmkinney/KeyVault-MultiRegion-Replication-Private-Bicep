@@ -11,6 +11,14 @@ Sample Code is provided for the purpose of illustration only and is not intended
 
 The same notice is available in [DISCLAIMER.md](DISCLAIMER.md).
 
+## Architecture diagram
+
+![Two-region private Key Vault replication with Event Grid delivery exceptions and a fenced secondary worker](docs/images/architecture.svg)
+
+[Architecture details and flow diagram](docs/architecture.md#solution-diagram) |
+[Editable Excalidraw source](docs/images/architecture.excalidraw)
+(open in [Microsoft Excalidraw](https://aka.ms/excalidraw)).
+
 ## Deployment paths
 
 - [Bicep deployment](docs/deployment-bicep.md): subscription-scope deployment,

@@ -3,6 +3,73 @@
 **Illustration only; not intended for production use.** This sample architecture
 is subject to the [sample code disclaimer](../DISCLAIMER.md).
 
+## Solution diagram
+
+![Private multi-region secret replication architecture](images/architecture.svg)
+
+[Download the editable Excalidraw source](images/architecture.excalidraw) and open
+it in [Microsoft Excalidraw](https://aka.ms/excalidraw). The diagram uses the
+published East US/Central US example; deployment-specific region overrides do
+not change the logical topology.
+
+The following GitHub-rendered flow shows the same logical services. Regional
+boxes are **not** VNet boundaries: PaaS services remain Azure-managed resources,
+accessed through endpoints in each region's VNet.
+
+```mermaid
+flowchart TB
+  subgraph P["East US - primary regional stamp"]
+    PV["Primary Key Vault<br/>Standard / RBAC / purge protection"]
+    PEG["Event Grid system topic<br/>System-assigned identity"]
+    PD["Event Grid dead-letter Blob<br/>Dedicated ZRS account"]
+    PB["Service Bus Premium<br/>kv-events + processing DLQ"]
+    PW["Flex worker + user-assigned identity<br/>Replicate / five-minute Reconcile<br/>Blob lease + destination lineage"]
+    PS["Runtime StorageV2 ZRS<br/>Host / package / coordination<br/>Blob, Queue, Table endpoints"]
+    PM["Private AMPLS<br/>Application Insights / Log Analytics / alerts"]
+    PV -->|"Platform event publishing; identifiers only"| PEG
+    PEG -.->|"Trusted-service delivery; NOT Private Link"| PB
+    PEG -.->|"Trusted-service dead-letter write"| PD
+    PB -->|"Private queue trigger"| PW
+    PV -->|"Read via primary VNet local vault PE"| PW
+    PW -->|"Private storage paths"| PS
+    PW -->|"Private telemetry"| PM
+  end
+  subgraph S["Central US - secondary regional stamp"]
+    SV["Secondary Key Vault<br/>Current-state replica / independent versions"]
+    SEG["Event Grid system topic<br/>Route muted by default"]
+    SD["Event Grid dead-letter Blob<br/>Dedicated ZRS account"]
+    SB["Service Bus Premium<br/>Independent queue + processing DLQ"]
+    SW["Secondary Flex worker: FENCED<br/>Same code / reversed vault direction"]
+    SS["Local runtime StorageV2 ZRS<br/>Independent host / package / coordination"]
+    SM["Local private AMPLS<br/>Application Insights / Log Analytics / alerts"]
+    SV -->|"Platform event publishing"| SEG
+    SEG -.->|"Trusted-service delivery; muted normally"| SB
+    SEG -.->|"Trusted-service dead-letter write"| SD
+    SB -.->|"Private trigger; worker disabled"| SW
+    SV -.->|"Read via secondary VNet local vault PE"| SW
+    SW -.->|"Private storage paths"| SS
+    SW -.->|"Private telemetry"| SM
+  end
+  PW ==>|"Async copy via primary VNet PE targeting secondary vault"| SV
+  SW -.->|"Reverse only after fencing and manual promotion; secondary VNet PE"| PV
+  classDef vault fill:#CFE4FA,stroke:#0078D4,color:#000;
+  classDef event fill:#FFF4CE,stroke:#F7630C,color:#000;
+  classDef worker fill:#DFF6DD,stroke:#107C10,color:#000;
+  classDef monitor fill:#E8DAEF,stroke:#5C2D91,color:#000;
+  class PV,SV,PB,SB,PS,SS vault;
+  class PEG,SEG,PD,SD event;
+  class PW,SW worker;
+  class PM,SM monitor;
+```
+
+**Important boundaries:** both workers initially start inactive; after activation,
+only the authoritative worker runs. Both VNets have local endpoints to both
+vaults, so no inter-region VNet peering is required. Event Grid push/dead-letter
+delivery uses managed identity and trusted-service exceptions, not Private Link.
+Private application/SCM publication requires a connected workstation or runner;
+ARM/Entra management traffic is separate. Client application redirection and
+writer fencing are operational actions, not automatic DNS failover.
+
 ## Independent regional stamps
 
 | Resource | East US | Central US |

@@ -1,0 +1,136 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1280" viewBox="0 0 1600 1280" role="img" aria-labelledby="title description">
+  <title id="title">Private multi-region Key Vault secret replication</title>
+  <desc id="description">Two independent regional stamps in East US and Central US. Only the primary worker runs after activation. Vault events go to Event Grid, which delivers to Service Bus and dead-letter storage using trusted-service exceptions, not Private Link. Workers access vaults, messaging, runtime storage, and monitoring through local private endpoints. Reverse replication requires fenced manual promotion.</desc>
+  <defs>
+    <marker id="blue" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#0078d4"/></marker>
+    <marker id="orange" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#f7630c"/></marker>
+    <marker id="green" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#107c10"/></marker>
+    <marker id="gray" markerWidth="10" markerHeight="10" refX="9" refY="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#667085"/></marker>
+    <style>
+      text { font-family: "Segoe UI", Arial, sans-serif; fill: #000; }
+      .heading { font-size: 28px; font-weight: 700; }
+      .region { font-size: 23px; font-weight: 700; }
+      .label { font-size: 20px; font-weight: 600; }
+      .detail { font-size: 17px; }
+      .small { font-size: 16px; }
+      .boundary { fill: none; stroke: #0078d4; stroke-width: 2; }
+      .service { fill: #cfe4fa; stroke: #0078d4; stroke-width: 2; }
+      .event { fill: #fff4ce; stroke: #f7630c; stroke-width: 2; }
+      .worker { fill: #dff6dd; stroke: #107c10; stroke-width: 2; }
+      .monitor { fill: #e8daef; stroke: #5c2d91; stroke-width: 2; }
+      .inactive { stroke-dasharray: 8 6; }
+      .private { fill: none; stroke: #0078d4; stroke-width: 3; marker-end: url(#blue); }
+      .exception { fill: none; stroke: #f7630c; stroke-width: 3; stroke-dasharray: 7 5; marker-end: url(#orange); }
+      .copy { fill: none; stroke: #107c10; stroke-width: 4; marker-end: url(#green); }
+      .standby { fill: none; stroke: #667085; stroke-width: 3; stroke-dasharray: 8 6; marker-end: url(#gray); }
+    </style>
+  </defs>
+  <rect width="1600" height="1280" fill="#fff"/>
+  <text x="40" y="45" class="heading">Private multi-region Key Vault secret replication</text>
+  <text x="40" y="78" class="detail">Single-writer current-state convergence | Example: East US + Central US (not paired with each other)</text>
+  <text x="40" y="108" class="small">Illustration only; not intended for production use. See DISCLAIMER.md.</text>
+
+  <rect x="30" y="135" width="720" height="870" rx="14" class="boundary"/>
+  <rect x="850" y="135" width="720" height="870" rx="14" class="boundary"/>
+  <text x="55" y="173" class="region">East US - authoritative primary</text>
+  <text x="875" y="173" class="region">Central US - secondary / recovery stamp</text>
+
+  <rect x="60" y="210" width="300" height="110" rx="10" class="event"/>
+  <text x="80" y="244" class="label">Event Grid system topic</text>
+  <text x="80" y="273" class="detail">Vault identifiers only; no values</text>
+  <text x="80" y="299" class="detail">System-assigned delivery identity</text>
+  <rect x="420" y="210" width="300" height="110" rx="10" class="event"/>
+  <text x="440" y="244" class="label">Event Grid dead-letter Blob</text>
+  <text x="440" y="273" class="detail">Separate ZRS storage account</text>
+  <text x="440" y="299" class="detail">Trusted-service exception + RBAC</text>
+
+  <rect x="880" y="210" width="300" height="110" rx="10" class="event"/>
+  <text x="900" y="244" class="label">Event Grid system topic</text>
+  <text x="900" y="273" class="detail">Route muted by default</text>
+  <text x="900" y="299" class="detail">System-assigned delivery identity</text>
+  <rect x="1240" y="210" width="300" height="110" rx="10" class="event"/>
+  <text x="1260" y="244" class="label">Event Grid dead-letter Blob</text>
+  <text x="1260" y="273" class="detail">Separate ZRS storage account</text>
+  <text x="1260" y="299" class="detail">Trusted-service exception + RBAC</text>
+
+  <rect x="60" y="390" width="300" height="120" rx="10" class="service"/>
+  <text x="80" y="425" class="label">Primary Key Vault</text>
+  <text x="80" y="455" class="detail">Standard / RBAC / private access</text>
+  <text x="80" y="483" class="detail">Soft delete + purge protection</text>
+  <rect x="420" y="390" width="300" height="120" rx="10" class="service"/>
+  <text x="440" y="425" class="label">Service Bus Premium</text>
+  <text x="440" y="455" class="detail">kv-events + processing DLQ</text>
+  <text x="440" y="483" class="detail">Private receiver / trusted sender</text>
+
+  <rect x="880" y="390" width="300" height="120" rx="10" class="service"/>
+  <text x="900" y="425" class="label">Secondary Key Vault</text>
+  <text x="900" y="455" class="detail">Current secret-state replica</text>
+  <text x="900" y="483" class="detail">Independent destination version IDs</text>
+  <rect x="1240" y="390" width="300" height="120" rx="10" class="service"/>
+  <text x="1260" y="425" class="label">Service Bus Premium</text>
+  <text x="1260" y="455" class="detail">kv-events + processing DLQ</text>
+  <text x="1260" y="483" class="detail">Queue is not geo-replicated</text>
+
+  <rect x="190" y="625" width="400" height="125" rx="10" class="worker"/>
+  <text x="210" y="659" class="label">Flex Consumption worker</text>
+  <text x="210" y="690" class="detail">Replicate + five-minute Reconcile</text>
+  <text x="210" y="720" class="detail">User-assigned identity / lease + lineage</text>
+  <rect x="1010" y="625" width="400" height="125" rx="10" class="worker inactive"/>
+  <text x="1030" y="659" class="label">Flex worker - FENCED by default</text>
+  <text x="1030" y="690" class="detail">Same code; reverse source/destination</text>
+  <text x="1030" y="720" class="detail">Enable only after controlled promotion</text>
+
+  <rect x="60" y="825" width="300" height="115" rx="10" class="service"/>
+  <text x="80" y="859" class="label">Runtime StorageV2 / ZRS</text>
+  <text x="80" y="889" class="detail">Host, deployment, coordination</text>
+  <text x="80" y="917" class="detail">Blob / Queue / Table private endpoints</text>
+  <rect x="420" y="825" width="300" height="115" rx="10" class="monitor"/>
+  <text x="440" y="859" class="label">Private monitoring</text>
+  <text x="440" y="889" class="detail">AMPLS + Insights + Log Analytics</text>
+  <text x="440" y="917" class="detail">Alerts + private ingestion / queries</text>
+  <rect x="880" y="825" width="300" height="115" rx="10" class="service"/>
+  <text x="900" y="859" class="label">Runtime StorageV2 / ZRS</text>
+  <text x="900" y="889" class="detail">Independent host / package / state</text>
+  <text x="900" y="917" class="detail">Blob / Queue / Table private endpoints</text>
+  <rect x="1240" y="825" width="300" height="115" rx="10" class="monitor"/>
+  <text x="1260" y="859" class="label">Private monitoring</text>
+  <text x="1260" y="889" class="detail">AMPLS + Insights + Log Analytics</text>
+  <text x="1260" y="917" class="detail">Separate regional DNS view</text>
+
+  <path d="M210 390V320" class="private"/>
+  <text x="65" y="355" class="small">Platform event publishing</text>
+  <path d="M1030 390V320" class="private"/>
+  <text x="885" y="355" class="small">Platform event publishing</text>
+  <path d="M360 255H420" class="exception"/>
+  <path d="M1180 255H1240" class="exception"/>
+  <path d="M350 300L435 390" class="exception"/>
+  <path d="M1170 300L1255 390" class="exception"/>
+  <path d="M210 510V565H285V625" class="private"/>
+  <text x="65" y="555" class="small">Read current source via local PE</text>
+  <path d="M570 510V565H495V625" class="private"/>
+  <text x="445" y="555" class="small">Private queue trigger</text>
+  <path d="M1030 510V565H1105V625" class="standby"/>
+  <path d="M1390 510V565H1315V625" class="standby"/>
+  <path d="M285 750V790H210V825" class="private"/>
+  <path d="M495 750V790H570V825" class="private"/>
+  <path d="M1105 750V790H1030V825" class="standby"/>
+  <path d="M1315 750V790H1390V825" class="standby"/>
+
+  <path d="M590 675H790V450H880" class="copy"/>
+  <text x="600" y="590" class="small">Async write</text>
+  <text x="600" y="613" class="small">via primary VNet's</text>
+  <text x="600" y="636" class="small">PE to remote vault</text>
+  <path d="M1010 735H970V1040H15V450H60" class="standby"/>
+  <text x="310" y="1068" class="detail">Reverse replication: only after old writer/worker fencing and manual promotion</text>
+
+  <text x="55" y="975" class="small">VNet 10.35.0.0/16 | isolated DNS | local PEs to both vaults</text>
+  <text x="875" y="975" class="small">VNet 10.36.0.0/16 | isolated DNS | local PEs to both vaults</text>
+
+  <path d="M60 1120H120" class="private"/>
+  <text x="140" y="1126" class="detail">Private worker data path / platform event publishing as labeled</text>
+  <path d="M60 1160H120" class="exception"/>
+  <text x="140" y="1166" class="detail">Event Grid exception: authenticated public IP space on Microsoft backbone, NOT Private Link</text>
+  <path d="M60 1200H120" class="standby"/>
+  <text x="140" y="1206" class="detail">Fenced standby/recovery path; never run both directions concurrently</text>
+  <text x="60" y="1250" class="small">18 private endpoints total. Service boxes are logical resources, not hosted inside the VNet. Both workers start inactive.</text>
+</svg>
