@@ -1,5 +1,8 @@
 # Azure Portal deployment guide (without Bicep)
 
+**Illustration only; not intended for production use.** This guide and its sample
+code are subject to the [sample code disclaimer](../DISCLAIMER.md).
+
 This guide creates the foundation resources manually. It includes a limited,
 Portal-uploadable ARM fallback for creating keyless Functions when the wizard
 cannot express the required settings. Portal screens change; the referenced Microsoft procedures describe

@@ -1,5 +1,8 @@
 # Operations and recovery
 
+**Illustration only; not intended for production use.** These sample procedures
+are subject to the [sample code disclaimer](../DISCLAIMER.md).
+
 ## Health and objectives
 
 Normal authority is East US; Central US is the replica. Keep all application

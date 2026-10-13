@@ -1,5 +1,8 @@
 # Bicep deployment guide
 
+**Illustration only; not intended for production use.** This guide and its sample
+code are subject to the [sample code disclaimer](../DISCLAIMER.md).
+
 This is a deployment procedure, not evidence that a live deployment has passed.
 Do not run deployment or live tests until the subscription owner authorizes them.
 

@@ -1,5 +1,8 @@
 # Architecture
 
+**Illustration only; not intended for production use.** This sample architecture
+is subject to the [sample code disclaimer](../DISCLAIMER.md).
+
 ## Independent regional stamps
 
 | Resource | East US | Central US |
