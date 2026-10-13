@@ -1,0 +1,12 @@
+/KeyVault-MultiRegion-Replication-Private/
+.venv/
+__pycache__/
+*.py[cod]
+local.settings.json
+.build/
+infra/**/*.json
+!infra/**/bicepconfig.json
+.azure/*.local.json
+infra/parameters/*.local.bicepparam
+*.zip
+.env
