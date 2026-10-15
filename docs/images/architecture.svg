@@ -55,7 +55,7 @@
 
   <rect x="60" y="390" width="300" height="120" rx="10" class="service"/>
   <text x="80" y="425" class="label">Primary Key Vault</text>
-  <text x="80" y="455" class="detail">Standard / RBAC / private access</text>
+  <text x="80" y="455" class="detail">Access policies / optional RBAC</text>
   <text x="80" y="483" class="detail">Soft delete + purge protection</text>
   <rect x="420" y="390" width="300" height="120" rx="10" class="service"/>
   <text x="440" y="425" class="label">Service Bus Premium</text>

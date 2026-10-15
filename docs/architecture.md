@@ -19,7 +19,7 @@ accessed through endpoints in each region's VNet.
 ```mermaid
 flowchart TB
   subgraph P["East US - primary regional stamp"]
-    PV["Primary Key Vault<br/>Standard / RBAC / purge protection"]
+    PV["Primary Key Vault<br/>Access policies default / RBAC optional<br/>Standard / purge protection"]
     PEG["Event Grid system topic<br/>System-assigned identity"]
     PD["Event Grid dead-letter Blob<br/>Dedicated ZRS account"]
     PB["Service Bus Premium<br/>kv-events + processing DLQ"]
@@ -105,32 +105,47 @@ to a remote vault does not make that remote service available during its outage.
 | Event Grid to Service Bus | Public endpoint IP space on Microsoft backbone; trusted-service bypass | System-assigned system-topic identity |
 | Event Grid dead-letter write | Trusted-service Storage exception, not Private Link | Same system-topic identity |
 | Worker receives messages | Local Service Bus private endpoint | Regional user-assigned worker identity |
-| Worker reads/writes secrets | Local private endpoints targeting both vaults | Regional user-assigned worker identity |
+| Worker reads/writes secrets | Local private endpoints targeting both vaults | Regional user-assigned identity; per-vault access policies or RBAC |
 | Host/package/coordination/diagnostics storage | Local service-specific private endpoints | Regional user-assigned worker identity |
 | Worker telemetry | Local AMPLS endpoint | Monitoring Metrics Publisher and Entra ingestion |
 | Infrastructure management | ARM/Entra public management endpoints | Operator deployment identity |
 | Code publication | App private deployment endpoint | Authorized publishing identity |
 
 Private DNS and authorization are independent. Successful DNS resolution does
-not demonstrate permission; an assigned role does not establish network access.
+not demonstrate permission; a role or policy grant does not establish network access.
 Private endpoints do not disable public endpoints automatically.
 
 ## Resource and permission details
 
-Key Vault has Standard SKU, RBAC, public network access disabled, no trusted
+Solution-managed Key Vault has Standard SKU, access policies by default (RBAC
+optional per vault), public network access disabled, no trusted
 service bypass, soft delete, and 90-day purge protection. VM deployment, disk
 encryption, and ARM secret retrieval switches are off because this workload
 does not need them.
+Reused vaults retain their detected model; policy/RBAC mixed pairs are supported.
+Microsoft supports both models but recommends RBAC for separation of duties.
+Vault-write principals can grant themselves data access under policies; this
+sample uses the customer-requested policy default rather than hiding that tradeoff.
 
 Worker identity permissions:
 
-- Secrets User on its local source vault.
-- Custom Secret Replica Writer on the opposite destination vault (metadata,
-  get, set, and attribute update only; no delete/purge/backup/restore).
+- Local source vault: secret Get/List policy or Key Vault Secrets User role.
+- Opposite destination vault: secret Get/List/Set policy or Custom Secret Replica
+  Writer role (metadata/get/set/attribute update). Policy Set includes attribute
+  updates. Neither branch grants key/certificate or delete/purge/backup/restore rights.
 - Data Receiver on the local queue, not both namespaces.
 - Blob Data Owner on runtime storage (host, deployment, coordination).
 - Table Data Contributor on runtime storage for host diagnostic events.
 - Monitoring Metrics Publisher on local Application Insights.
+
+The reverse worker has its corresponding grants in advance but remains fenced.
+Both identities are created before managed vaults, allowing complete worker
+policy lists on every managed-vault PUT. The template owns these managed lists;
+unrelated external grants require existing-vault reference mode to be preserved.
+Reused policy-based vaults receive one additive policy request containing both
+worker object/principal IDs, without a parent-vault PUT or whole-list replacement.
+Role assignments and the custom role are conditional on effective RBAC use.
+The worker SDK/authentication is unchanged; non-vault services still use RBAC.
 
 No queue storage binding uses the runtime Queue endpoint today. The account
 supports it and the private endpoint is provisioned for host compatibility;

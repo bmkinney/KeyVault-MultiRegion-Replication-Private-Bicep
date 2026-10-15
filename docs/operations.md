@@ -79,6 +79,12 @@ to silence a recovery failure. See [existing-vault safeguards](existing-vaults.m
 Changing a deployment parameter is not a distributed fence. Operational checks
 and IAM changes are mandatory. Do not apply a deployment that depends on the
 failed region during the outage and expect it to perform regional promotion.
+Use each vault's actual model for permission changes: modify/revoke secret Set
+in the relevant writer access policy or remove the relevant RBAC writer
+assignment. Reader-only grants cannot fence a writer with another effective
+grant. Review inherited roles, other policies, and desired state; a deployment
+can restore worker grants that an incident operator revoked manually.
+Keep managed-vault authorization parameters unchanged during promotion/failback.
 
 ## Failback to East US
 
@@ -112,7 +118,7 @@ There are two independent stores:
 - Blob container `eventgrid-deadletter`: events that failed before queue delivery.
 
 Inspect through a private client using an approved identity. Determine source
-authority, validate event contents, and fix underlying network/RBAC/code failures.
+authority, validate event contents, and fix underlying network/authorization/code failures.
 Replay through the corresponding authorized source queue only after explicit
 approval. Historical notifications cause a current-state synchronization.
 
@@ -129,10 +135,16 @@ and delete only the explicitly identified deployment resource groups.
 When reusing vaults or system topics, exclude their resource groups from cleanup.
 Even an `existing` Bicep reference cannot protect a vault if an operator deletes
 its containing group. Remove only approved integration resources in shared groups.
+For policy-based vaults, remove only the solution worker principals' approved
+entries; preserve application/operator policies. For RBAC vaults, remove only
+the corresponding scoped solution assignments. The custom role is shared by
+both stamps; do not remove it while any assignment still requires it.
 
 Soft-deleted vault names remain reserved. Recovering a vault does not restore
 its RBAC assignments/Event Grid integrations; restore those through reviewed
-IaC or the Portal guide before reactivating.
+IaC or the Portal guide before reactivating. Check the recovered vault's actual
+authorization model and effective access policies or role assignments, and
+verify worker access rather than assuming recovery or preflight proves it.
 
 Native encrypted Key Vault object backups require the same subscription/geography.
 The example regions meet that geography condition, but backup/restore is not

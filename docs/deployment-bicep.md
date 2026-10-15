@@ -22,8 +22,11 @@ Select a subscription and check:
   Microsoft.App, Microsoft.KeyVault, Microsoft.EventGrid, Microsoft.ServiceBus,
   Microsoft.ManagedIdentity, Microsoft.Insights, Microsoft.OperationalInsights.
 - Permission to deploy subscription/resource-group resources and assign roles.
-  Contributor alone does not grant role-assignment or custom-role-definition
-  write permissions.
+  Contributor alone does not grant role-assignment write permissions. RBAC
+  vaults also require custom-role-definition write permission; policy-based
+  vaults require `Microsoft.KeyVault/vaults/accessPolicies/write` at their scopes.
+  Storage, Service Bus, Event Grid delivery, and monitoring still use RBAC even
+  when both vaults use access policies.
 - Nonoverlapping CIDRs with the deployment network.
 - Global name availability for vault, storage, namespace, and app names.
 - Operator private access to both monitoring DNS views. Do not merge two AMPLS
@@ -35,6 +38,8 @@ and ARM validation enforces service-specific character rules.
 
 Role assignments may take up to ten minutes to propagate. A successful ARM
 deployment is not evidence that every data-plane permission is ready.
+Verify policy grants and actual worker access too; read-only compatibility
+preflight does not test managed-identity secret reads or writes.
 
 ## 2. Configure initial parameters
 
@@ -57,6 +62,58 @@ param authoritativeRegion = 'primary'
 
 These settings fence both triggers and mute both subscriptions using a nonmatching
 subject filter. The resources are present but do not process vault changes.
+
+### Vault authorization
+
+New solution-managed vaults default to access policies, explicitly setting
+`enableRbacAuthorization = false` even with API `2026-02-01`. Choose independently:
+
+```bicep
+param primaryVaultAuthorizationModel = 'accessPolicy'
+param secondaryVaultAuthorizationModel = 'accessPolicy'
+```
+
+Use `'rbac'` for either or both parameters to opt into RBAC. When a vault resource
+ID is supplied, its actual authorization model is detected and preserved instead;
+the corresponding model parameter does not change it. False, legacy null, or an
+omitted `enableRbacAuthorization` means access policies. Mixed pairs are supported.
+Deployment outputs report each effective model and worker principal ID.
+
+Access policies grant the local worker secret **Get, List** and the opposite
+worker **Get, List, Set** for reverse-direction recovery. Set also permits secret
+attribute updates, including disabling a replica. There is no policy permission
+named Update. No key, certificate, delete, purge, backup, or restore permission is
+granted. Use managed-identity **principal/object IDs**, not client IDs, in policies.
+The same identity-authenticated worker code serves both models.
+
+For a reused policy-based vault, one child `accessPolicies/add` request adds both
+worker entries without replacing the full list or unrelated principals' entries.
+The managed identities and vault must share the subscription's Entra tenant;
+confirm existing policy capacity (maximum 1,024 entries) and effective permissions.
+
+For a solution-managed vault, the template owns its complete policy list. Both
+identities are created first so vault creation/redeployment includes both worker
+grants rather than clearing the list and restoring them later. Extra policies
+added outside this template are not preserved on a managed-vault redeployment.
+Use [existing-vault reference mode](existing-vaults.md) for shared vaults or to
+retain externally managed application/operator policies. Assign any temporary
+test permissions after the final infrastructure update.
+
+**Upgrade warning:** earlier versions created RBAC-managed vaults. Before
+redeploying one of those environments, explicitly set both model parameters to
+`'rbac'` (or the appropriate model for each side) in its actual parameter file.
+The new default is not a migration instruction. Preservation by detection applies
+to vaults selected by resource ID, not to vaults still managed by the template.
+Changing a managed vault's parameter changes its authorization model and can
+interrupt clients. Plan any migration separately, fence writes, and review all
+grants; incremental deployment does not automatically delete old policy/role
+resources when their conditions become false.
+
+Microsoft supports both models but recommends RBAC: principals with vault-write
+control, such as Contributor/Key Vault Contributor, can grant themselves data
+access on policy-based vaults. Review that privilege boundary with the customer.
+The custom replica role is defined only when at least one selected vault uses
+RBAC; assignments are made only on RBAC vaults.
 
 ## 3. Validate, preview, and deploy infrastructure
 

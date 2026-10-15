@@ -15,6 +15,7 @@ Approved through interactive clarification on 2026-10-09.
 | Size | 100 secrets, 10 updates/minute | Bounded demo workload |
 | Provenance | Original implementation with attribution | No copying from an upstream clone without a license |
 | Existing vaults | Independent new/existing selection within the subscription | Preserve settings; scoped integration resources only |
+| Vault authorization (subsequent customer decision) | Access-policy default for managed vaults; per-vault RBAC opt-in; reused models detected/preserved | Accommodate policy-based customers and mixed pairs without automatic migration |
 | Source selection for reused vaults | Explicit name allowlist/prefix or whole-vault opt-in | Avoid accidental copying from shared vaults |
 | Destination collisions | Reject unmanaged names unless replacement is explicitly approved | Preserve existing unrelated contents |
 
@@ -32,9 +33,20 @@ Approved through interactive clarification on 2026-10-09.
   prefix. This permits repeatable incremental updates without relying on
   conditional-resource deletion, which incremental ARM deployments do not do.
 - Opposite-region replica-write permissions are preassigned for recovery using
-  a custom role limited to readMetadata, getSecret, setSecret, and update.
+  secret Get/List/Set policies or a custom RBAC role limited to readMetadata,
+  getSecret, setSecret, and update. Policy Set includes attribute updates.
   Secrets Officer was narrowed because it includes delete/purge/backup/restore
   operations that this implementation does not need.
+- Microsoft supports both vault models but recommends RBAC for separation of
+  duties. Under policies, vault-write principals can grant themselves data
+  access; the policy default is a customer-selected tradeoff, not a claim of
+  stronger isolation. Source filtering is not an IAM boundary under either model.
+- Managed vaults include both worker policies from their first PUT; creating
+  identities ahead of both foundations avoids cross-foundation dependencies and
+  temporary empty policy lists on redeploy. The template owns managed-vault
+  lists. Reused vaults instead receive an additive child policy update without
+  replacing other principals' entries. Existing RBAC deployments must pin
+  `'rbac'` explicitly before adopting the new defaults.
 - Three reserved secret tags store non-value lineage. Sources may use at most
   12 other tags. Copying a secret with more tags fails visibly.
 - Unreadable latest versions with identical creation timestamps are not guessed.

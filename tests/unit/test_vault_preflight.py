@@ -3,9 +3,12 @@ import sys
 import unittest
 from pathlib import Path
 from unittest.mock import Mock
+from contextlib import redirect_stdout
+from io import StringIO
+from itertools import product
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from check_vault_integration import preflight, azure_json
+from check_vault_integration import preflight, azure_json, authorization_model
 
 SUBSCRIPTION = "00000000-0000-0000-0000-000000000000"
 VAULT_ID = f"/subscriptions/{SUBSCRIPTION}/resourceGroups/existing/providers/Microsoft.KeyVault/vaults/source"
@@ -50,7 +53,92 @@ class PreflightTests(unittest.TestCase):
         query.assert_not_called()
 
     def test_compatible_existing_vault(self):
+        self.assertEqual(authorization_model(self.vault["properties"]), "rbac")
         preflight(self.config, SUBSCRIPTION, self.query)
+
+    def test_access_policy_vaults_including_legacy_null_are_preserved(self):
+        for enabled in (False, None):
+            with self.subTest(enabled=enabled):
+                self.vault["properties"]["enableRbacAuthorization"] = enabled
+                original = copy.deepcopy(self.vault)
+                output = StringIO()
+                with redirect_stdout(output):
+                    preflight(self.config, SUBSCRIPTION, self.query)
+                self.assertIn("accessPolicy; model preserved", output.getvalue())
+                self.assertEqual(self.vault, original)
+
+    def test_legacy_missing_model_uses_access_policies(self):
+        del self.vault["properties"]["enableRbacAuthorization"]
+        self.assertEqual(authorization_model(self.vault["properties"]), "accessPolicy")
+        preflight(self.config, SUBSCRIPTION, self.query)
+
+    def test_new_vault_model_does_not_override_reused_vault(self):
+        for actual, configured in [(True, "accessPolicy"), (False, "rbac")]:
+            with self.subTest(actual=actual, configured=configured):
+                self.vault["properties"]["enableRbacAuthorization"] = actual
+                self.config["primaryVaultAuthorizationModel"] = {"value": configured}
+                original = copy.deepcopy(self.vault)
+                preflight(self.config, SUBSCRIPTION, self.query)
+                self.assertEqual(self.vault, original)
+
+    def test_both_new_vault_models_are_valid(self):
+        for primary in ("accessPolicy", "rbac"):
+            for secondary in ("accessPolicy", "rbac"):
+                query = Mock(side_effect=AssertionError("unexpected Azure call"))
+                preflight(params(
+                    primaryVaultAuthorizationModel=primary,
+                    secondaryVaultAuthorizationModel=secondary,
+                ), SUBSCRIPTION, query)
+                query.assert_not_called()
+
+    def test_mixed_existing_vault_models(self):
+        secondary = copy.deepcopy(self.vault)
+        secondary.update(id=VAULT_ID + "-replica", location="centralus")
+        for primary_model, secondary_model in [(True, False), (False, True)]:
+            with self.subTest(primary=primary_model, secondary=secondary_model):
+                self.vault["properties"]["enableRbacAuthorization"] = primary_model
+                secondary["properties"]["enableRbacAuthorization"] = secondary_model
+                query = Mock(side_effect=[self.vault, [], secondary])
+                config = {**self.config, "secondaryVaultResourceId": {"value": secondary["id"]}}
+                preflight(config, SUBSCRIPTION, query)
+                self.assertEqual(query.call_count, 3)
+                self.assertTrue(all("list" in call.args or "show" in call.args for call in query.call_args_list))
+
+    def test_all_new_existing_and_authorization_combinations_are_read_only(self):
+        for primary_exists, secondary_exists, primary_rbac, secondary_rbac in product((False, True), repeat=4):
+            with self.subTest(existing=(primary_exists, secondary_exists), rbac=(primary_rbac, secondary_rbac)):
+                vaults = {}
+                values = {"secretNames": ["selected"]}
+                for side, exists, rbac in [
+                    ("primary", primary_exists, primary_rbac), ("secondary", secondary_exists, secondary_rbac),
+                ]:
+                    values[f"{side}VaultAuthorizationModel"] = "rbac" if rbac else "accessPolicy"
+                    if exists:
+                        vault = copy.deepcopy(self.vault)
+                        vault["id"] = VAULT_ID + f"-{side}"
+                        vault["location"] = "eastus" if side == "primary" else "centralus"
+                        vault["properties"]["enableRbacAuthorization"] = rbac
+                        vaults[vault["id"]] = vault
+                        values[f"{side}VaultResourceId"] = vault["id"]
+                original = copy.deepcopy(vaults)
+
+                def read_only_query(*args):
+                    if args[:2] == ("resource", "show"):
+                        return vaults[args[3]]
+                    if args[:3] == ("eventgrid", "system-topic", "list"):
+                        return []
+                    raise AssertionError(f"Unexpected non-read-only query: {args}")
+
+                query = Mock(side_effect=read_only_query)
+                with redirect_stdout(StringIO()):
+                    preflight(params(**values), SUBSCRIPTION, query)
+                self.assertEqual(query.call_count, len(vaults) + bool(vaults))
+                self.assertEqual(vaults, original)
+
+    def test_invalid_detected_authorization_model_rejected(self):
+        for invalid in ("false", "true", 0, 1, [], {}):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "boolean"):
+                authorization_model({"enableRbacAuthorization": invalid})
 
     def test_existing_vault_requires_explicit_selection(self):
         with self.assertRaisesRegex(ValueError, "Select"):
@@ -73,9 +161,9 @@ class PreflightTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "region"):
             preflight(self.config, SUBSCRIPTION, self.query)
 
-    def test_no_implicit_authorization_or_security_changes(self):
+    def test_no_implicit_security_changes(self):
         for key, value in [
-            ("enableRbacAuthorization", False), ("enablePurgeProtection", False),
+            ("enablePurgeProtection", False),
             ("enableSoftDelete", False), ("publicNetworkAccess", "Enabled"),
         ]:
             with self.subTest(key=key):
@@ -134,6 +222,10 @@ class PreflightTests(unittest.TestCase):
             {"secretPrefix": "*"},
             {"replicateAllSecrets": "false"},
             {"allowUnmanagedOverwrite": "false"},
+            {"primaryVaultAuthorizationModel": "RBAC"},
+            {"secondaryVaultAuthorizationModel": "unknown"},
+            {"primaryVaultAuthorizationModel": False},
+            {"secondaryVaultAuthorizationModel": None},
         ]:
             with self.subTest(values=values), self.assertRaises(ValueError):
                 preflight(params(**values), SUBSCRIPTION, Mock())

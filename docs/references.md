@@ -10,6 +10,12 @@ certify this custom application's behavior. Local and live tests are separate.
 | Object backup subscription/geography constraints | [Key Vault backup](https://learn.microsoft.com/en-us/azure/key-vault/general/backup) |
 | Soft delete, purge protection, recovery integration loss | [Soft delete](https://learn.microsoft.com/en-us/azure/key-vault/general/soft-delete-overview) |
 | Vault read/write roles and independent control/data planes | [Key Vault RBAC](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-guide) |
+| Both vault authorization models supported; 2026-02-01 new-vault RBAC default; legacy null/false behavior | [Access-control defaults](https://learn.microsoft.com/en-us/azure/key-vault/general/access-control-default) |
+| RBAC recommendation and access-policy self-grant privilege boundary | [RBAC versus access policies](https://learn.microsoft.com/en-us/azure/key-vault/general/rbac-access-policy) |
+| Managed-identity policy principals and 1,024-entry limit | [Assign access policies](https://learn.microsoft.com/en-us/azure/key-vault/general/assign-access-policy) |
+| Explicit false authorization and managed-vault policy schema at the selected API | [Vaults 2026-02-01](https://learn.microsoft.com/en-us/azure/templates/microsoft.keyvault/2026-02-01/vaults) |
+| Additive child policy updates rather than whole-vault/list replacement | [Access policies 2026-02-01](https://learn.microsoft.com/en-us/azure/templates/microsoft.keyvault/2026-02-01/vaults/accesspolicies) |
+| Secret attribute updates require secrets/set under access policies | [UpdateSecretProperties remarks](https://learn.microsoft.com/en-us/dotnet/api/azure.security.keyvault.secrets.secretclient.updatesecretproperties?view=azure-dotnet) |
 | Exact non-destructive secret data actions for custom replica role | [Key Vault permissions](https://learn.microsoft.com/en-us/azure/role-based-access-control/permissions/security#microsoftkeyvault) |
 | Secret event fields and available events | [Key Vault Event Grid schema](https://learn.microsoft.com/en-us/azure/event-grid/event-schema-key-vault) |
 | Explicit system-topic creation, regional/subscription constraints | [System topics](https://learn.microsoft.com/en-us/azure/event-grid/system-topics) |

@@ -5,6 +5,9 @@ param primaryLocation = 'eastus'
 param secondaryLocation = 'centralus'
 param primaryVaultResourceId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/existing-primary/providers/Microsoft.KeyVault/vaults/example-primary'
 param secondaryVaultResourceId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/existing-secondary/providers/Microsoft.KeyVault/vaults/example-secondary'
+// Existing vaults auto-detect RBAC or access policies; these models apply only when an ID is empty.
+param primaryVaultAuthorizationModel = 'accessPolicy'
+param secondaryVaultAuthorizationModel = 'accessPolicy'
 // If a vault already publishes events, supply its system topic ID; otherwise leave empty.
 param primarySystemTopicResourceId = ''
 param secondarySystemTopicResourceId = ''

@@ -17,6 +17,14 @@ param primaryVaultResourceId string = ''
 @description('Existing secondary vault ARM ID in this subscription; empty creates a vault.')
 param secondaryVaultResourceId string = ''
 
+@description('Authorization for a solution-managed primary vault. Reused vaults retain their detected model.')
+@allowed(['accessPolicy', 'rbac'])
+param primaryVaultAuthorizationModel string = 'accessPolicy'
+
+@description('Authorization for a solution-managed secondary vault. Reused vaults retain their detected model.')
+@allowed(['accessPolicy', 'rbac'])
+param secondaryVaultAuthorizationModel string = 'accessPolicy'
+
 @description('Existing system topic for the primary vault; preflight requires reuse when one exists.')
 param primarySystemTopicResourceId string = ''
 
@@ -73,29 +81,6 @@ var token = take(uniqueString(subscription().id, workload), 8)
 var primaryPrefix = '${workload}-p-${token}'
 var secondaryPrefix = '${workload}-s-${token}'
 
-resource replicaWriterRole 'Microsoft.Authorization/roleDefinitions@2022-04-01' = {
-  name: guid(subscription().id, workload, 'secret-replica-writer')
-  properties: {
-    roleName: '${workload} Secret Replica Writer ${token}'
-    description: 'Read and set current replica secrets and attributes; no delete, purge, backup, or restore.'
-    type: 'CustomRole'
-    assignableScopes: [subscription().id]
-    permissions: [
-      {
-        actions: []
-        notActions: []
-        dataActions: [
-          'Microsoft.KeyVault/vaults/secrets/readMetadata/action'
-          'Microsoft.KeyVault/vaults/secrets/getSecret/action'
-          'Microsoft.KeyVault/vaults/secrets/setSecret/action'
-          'Microsoft.KeyVault/vaults/secrets/update/action'
-        ]
-        notDataActions: []
-      }
-    ]
-  }
-}
-
 resource primaryGroup 'Microsoft.Resources/resourceGroups@2025-04-01' = {
   name: 'rg-${primaryPrefix}'
   location: primaryLocation
@@ -106,6 +91,26 @@ resource secondaryGroup 'Microsoft.Resources/resourceGroups@2025-04-01' = {
   name: 'rg-${secondaryPrefix}'
   location: secondaryLocation
   tags: tags
+}
+
+module primaryIdentity './modules/worker-identity.bicep' = {
+  name: 'primary-worker-identity'
+  scope: primaryGroup
+  params: {
+    prefix: primaryPrefix
+    location: primaryLocation
+    tags: tags
+  }
+}
+
+module secondaryIdentity './modules/worker-identity.bicep' = {
+  name: 'secondary-worker-identity'
+  scope: secondaryGroup
+  params: {
+    prefix: secondaryPrefix
+    location: secondaryLocation
+    tags: tags
+  }
 }
 
 module primary './modules/foundation.bicep' = {
@@ -119,8 +124,11 @@ module primary './modules/foundation.bicep' = {
     alertEmail: alertEmail
     tags: tags
     existingVaultResourceId: primaryVaultResourceId
+    vaultAuthorizationModel: primaryVaultAuthorizationModel
+    replicaWriterPrincipalId: secondaryIdentity.outputs.principalId
     existingSystemTopicResourceId: primarySystemTopicResourceId
   }
+  dependsOn: [primaryIdentity]
 }
 
 module secondary './modules/foundation.bicep' = {
@@ -134,7 +142,19 @@ module secondary './modules/foundation.bicep' = {
     alertEmail: alertEmail
     tags: tags
     existingVaultResourceId: secondaryVaultResourceId
+    vaultAuthorizationModel: secondaryVaultAuthorizationModel
+    replicaWriterPrincipalId: primaryIdentity.outputs.principalId
     existingSystemTopicResourceId: secondarySystemTopicResourceId
+  }
+  dependsOn: [secondaryIdentity]
+}
+
+module replicaWriterRole './modules/replica-writer-role.bicep' = {
+  name: '${workload}-${token}-replica-writer-role'
+  params: {
+    workload: workload
+    token: token
+    enabled: primary.outputs.vaultUsesRbac || secondary.outputs.vaultUsesRbac
   }
 }
 
@@ -143,9 +163,11 @@ module primaryVaultAccess './modules/vault-access.bicep' = {
   scope: resourceGroup(empty(primaryVaultResourceId) ? primaryGroup.name : split(primaryVaultResourceId, '/')[4])
   params: {
     vaultName: primary.outputs.vaultName
+    useRbac: primary.outputs.vaultUsesRbac
+    tenantId: primary.outputs.vaultTenantId
     readerPrincipalId: primary.outputs.principalId
     writerPrincipalId: secondary.outputs.principalId
-    writerRoleId: replicaWriterRole.id
+    writerRoleId: replicaWriterRole.outputs.id
   }
 }
 
@@ -154,9 +176,11 @@ module secondaryVaultAccess './modules/vault-access.bicep' = {
   scope: resourceGroup(empty(secondaryVaultResourceId) ? secondaryGroup.name : split(secondaryVaultResourceId, '/')[4])
   params: {
     vaultName: secondary.outputs.vaultName
+    useRbac: secondary.outputs.vaultUsesRbac
+    tenantId: secondary.outputs.vaultTenantId
     readerPrincipalId: secondary.outputs.principalId
     writerPrincipalId: primary.outputs.principalId
-    writerRoleId: replicaWriterRole.id
+    writerRoleId: replicaWriterRole.outputs.id
   }
 }
 
@@ -284,9 +308,11 @@ output primaryResources object = {
   vaultResourceId: primary.outputs.vaultId
   vaultResourceGroup: primary.outputs.vaultResourceGroup
   vaultIsExisting: !empty(primaryVaultResourceId)
+  vaultAuthorizationModel: primary.outputs.vaultUsesRbac ? 'rbac' : 'accessPolicy'
   storage: primary.outputs.storageName
   serviceBus: primary.outputs.serviceBusName
   identityClientId: primary.outputs.clientId
+  identityPrincipalId: primary.outputs.principalId
 }
 
 output secondaryResources object = {
@@ -297,7 +323,9 @@ output secondaryResources object = {
   vaultResourceId: secondary.outputs.vaultId
   vaultResourceGroup: secondary.outputs.vaultResourceGroup
   vaultIsExisting: !empty(secondaryVaultResourceId)
+  vaultAuthorizationModel: secondary.outputs.vaultUsesRbac ? 'rbac' : 'accessPolicy'
   storage: secondary.outputs.storageName
   serviceBus: secondary.outputs.serviceBusName
   identityClientId: secondary.outputs.clientId
+  identityPrincipalId: secondary.outputs.principalId
 }
