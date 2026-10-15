@@ -43,7 +43,13 @@ The same notice is available in [DISCLAIMER.md](DISCLAIMER.md).
 | Recovery | Initial/periodic reconciliation every five minutes; retry-safe lineage |
 | Networking | Isolated VNets, local endpoints to both vaults, private storage/messaging/app access |
 | Telemetry | Regional Log Analytics/Application Insights and private-only AMPLS |
-| Identity | Managed identities; RBAC; storage shared keys and Service Bus local authentication disabled |
+| Identity | Managed identities; vault access policies by default or per-vault RBAC; other services use RBAC; shared keys/local authentication disabled |
+
+New solution-managed vaults default to **Vault access policy**. RBAC is an
+independent opt-in for each vault; reused vaults keep their detected model,
+including mixed RBAC/access-policy pairs. Microsoft recommends RBAC for stronger
+separation of duties; this sample's policy default accommodates the customer use
+case. See [authorization and upgrade guidance](docs/deployment-bicep.md#vault-authorization).
 
 **Not every hop uses Private Link.** Event Grid push delivery uses a system-assigned
 identity and trusted-service exception on the Microsoft backbone. Event Grid

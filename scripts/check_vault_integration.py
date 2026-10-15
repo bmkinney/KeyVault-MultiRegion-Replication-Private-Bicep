@@ -15,6 +15,13 @@ RESOURCE_ID = re.compile(
 SECRET_NAME = re.compile(r"^[A-Za-z0-9-]{1,127}$")
 
 
+def authorization_model(properties):
+    enabled = properties.get("enableRbacAuthorization")
+    if enabled is not None and not isinstance(enabled, bool):
+        raise ValueError("Vault enableRbacAuthorization must be a boolean or legacy null")
+    return "rbac" if enabled is True else "accessPolicy"
+
+
 def azure_json(*arguments):
     # Windows Azure CLI is a .cmd launcher; reject shell metacharacters before invocation.
     if any(re.search(r'[&|<>^%!"()\r\n]', argument) for argument in arguments):
@@ -55,6 +62,9 @@ def preflight(parameters, subscription, query=azure_json):
         raise ValueError("Select names, a prefix, or explicitly set replicateAllSecrets = true")
     if not isinstance(value("allowUnmanagedOverwrite", False), bool):
         raise ValueError("allowUnmanagedOverwrite must be a boolean")
+    for side in ("primary", "secondary"):
+        if value(f"{side}VaultAuthorizationModel", "accessPolicy") not in ("accessPolicy", "rbac"):
+            raise ValueError(f"{side}VaultAuthorizationModel must be accessPolicy or rbac")
     topics = None
     for side, vault_id in zip(("primary", "secondary"), vault_ids):
         topic_id = value(f"{side}SystemTopicResourceId", "")
@@ -67,8 +77,7 @@ def preflight(parameters, subscription, query=azure_json):
         props = vault["properties"]
         if vault["location"].lower() != value(f"{side}Location", "eastus" if side == "primary" else "centralus").lower():
             raise ValueError(f"{side}Location must match the existing vault region")
-        if props.get("enableRbacAuthorization") is not True:
-            raise ValueError("Existing vault must use RBAC; authorization model is never changed automatically")
+        model = authorization_model(props)
         if props.get("enablePurgeProtection") is not True or props.get("enableSoftDelete") is False:
             raise ValueError("Existing vault must have soft delete and purge protection")
         if (props.get("publicNetworkAccess") or "Enabled").lower() != "disabled":
@@ -122,7 +131,7 @@ def preflight(parameters, subscription, query=azure_json):
                 and topic.get("tags", {}).get("purpose") == "private-secret-replication-demo"
             ):
                 raise ValueError("A system topic already exists; supply its ARM ID instead of creating another")
-        print(f"Existing {side} vault preflight passed: {vault_id}")
+        print(f"Existing {side} vault preflight passed ({model}; model preserved): {vault_id}")
 
 
 def main():

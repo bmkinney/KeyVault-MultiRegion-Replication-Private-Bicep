@@ -121,3 +121,36 @@ delivery, subscription policy, and collision/failover exercises remain live gate
 
 Completion self-check: local compilation **PASS**; secure defaults and preservation
 assertions **PASS**; Checkov **REVIEWED, NOT CLEAN**; live integration **PENDING**.
+
+## Dual vault authorization (2026-10-15)
+
+Added access-policy defaults for solution-managed vaults, per-vault RBAC opt-in,
+and detection/preservation of reused-vault models, including legacy null/omitted
+properties and mixed pairs. Existing policy-based vaults receive one additive
+worker policy update; their parent vault and unrelated policies are not replaced.
+Managed-vault lists are template-owned and include both worker grants from the
+initial PUT. Earlier managed RBAC deployments must explicitly retain `'rbac'`
+parameters before adopting this revision.
+
+| Check | Result |
+| --- | --- |
+| Main Bicep and both parameter examples | Compilation exit 0, no diagnostics |
+| Runtime/preflight unit tests | 69 passed; 16 new/existing/model combinations, mixed pairs, legacy properties, invalid models, read-only preservation |
+| Exact compiled-infrastructure assertions | 19 passed; per-side defaults/model/tenant/principal wiring, additive least-privilege policies, complete managed-vault lists, conditional RBAC roles/assignments, stable identity/role naming |
+| Architecture SVG/Excalidraw and plan JSON | Parse successfully; diagram text dimensions/IDs and local documentation links checked |
+| Unsuppressed Checkov 3.3.22 | 59 passed, 14 failed, 0 skipped, 0 parsing errors; exit 1 |
+
+The same seven scanner rule IDs remain open with the dispositions above. The ARM
+scanner did not report a vault-authorization rule; its unchanged totals are not
+evidence that it evaluated access-policy defaults or runtime-selected branches.
+Exact assertions cover the compiled authorization expressions separately.
+Microsoft's RBAC recommendation and the vault-write self-grant risk of access
+policies are documented explicitly; the customer-requested default is not a
+security-recommendation override for other deployments.
+
+Completion self-check: local compilation/regressions **PASS**; private networking,
+identity-only non-vault services, non-destructive secret permissions, and
+existing-vault preservation assertions **PASS**; Checkov **REVIEWED, NOT CLEAN**;
+live access-policy/RBAC propagation, operator permissions, deployment/Portal
+parity, and mixed-model failover **PENDING**. No Azure resource was queried or
+changed, and no new runtime or certificate behavior is claimed by these checks.

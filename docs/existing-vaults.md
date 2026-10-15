@@ -13,7 +13,7 @@ their resource groups may differ from the new infrastructure groups.
 | --- | --- |
 | Vault resource/configuration | Bicep `existing` reference; no vault PUT, recreation, network/security toggle, or tag changes |
 | Existing system topic | Reused by explicit ARM ID; no identity/configuration/diagnostic changes |
-| RBAC | Add worker read/replica-write assignments at the selected vaults' actual scopes |
+| Authorization | Detect and preserve each vault's RBAC or access-policy model; add matching worker grants at that vault |
 | Networking | Add endpoint connections from the two solution VNets; leave previous connections/DNS views untouched |
 | Events | Add a dedicated replication subscription to the selected/new system topic |
 | Vault diagnostics | Leave existing settings unchanged; use your existing audit destinations |
@@ -31,7 +31,9 @@ from `scripts\Deploy.ps1`, before ARM validation/what-if/deployment. It requires
 
 - Full same-subscription vault/system-topic ARM IDs and two distinct vaults.
 - Each existing vault in its configured `primaryLocation`/`secondaryLocation`.
-- Existing RBAC authorization, soft delete, and purge protection.
+- Either RBAC or vault access policies, plus soft delete and purge protection.
+  True `enableRbacAuthorization` means RBAC; false, legacy null, or an omitted
+  property means access policies. Invalid nonboolean values are rejected.
 - Public vault access already Disabled. The sample does not disable access that
   other clients still need; migrate those clients separately or do not integrate.
 - Explicit name allowlist, prefix, or whole-vault opt-in when either vault exists.
@@ -47,6 +49,45 @@ require the deployment operator's review.
 Use the supplied deployment script rather than bypassing these checks with a raw
 ARM command. A direct deployment can bypass Python validation; the worker still
 fails closed on an empty secret selection, but that does not replace preflight.
+
+## Authorization and permissions
+
+Access policies are supported; **RBAC is not a Key Vault integration requirement**.
+Each reused vault retains its current model, independently of the other vault.
+For example, the source may use access policies while the replica uses RBAC.
+The `primaryVaultAuthorizationModel`/`secondaryVaultAuthorizationModel` parameters
+default to `'accessPolicy'` but apply only when that side's vault ID is empty.
+There is no automatic authorization migration for a reused vault.
+
+| Vault model | Local source-reader worker | Opposite-region replica-writer worker |
+| --- | --- | --- |
+| Access policy | Secrets Get, List | Secrets Get, List, Set |
+| RBAC | Key Vault Secrets User | Custom Secret Replica Writer: readMetadata, getSecret, setSecret, update |
+
+Both grants are preassigned per vault so the fenced standby can reverse direction
+after promotion. Set includes secret attribute updates; policy permissions have
+no separate Update entry. No key/certificate or delete/purge/backup/restore rights
+are added. Filtering is application logic: grants allow access across the vault,
+not just selected names. Use dedicated vaults if IAM isolation is required.
+
+Policy-based integration uses one `vaults/accessPolicies` **add** operation per
+vault containing both worker principal IDs and the vault's tenant ID. It does
+not use replace/remove, redeploy the vault, or replace other principals' policies.
+The worker identities must be in the same tenant; confirm available policy
+capacity (1,024 entries) and verify existing/effective grants separately.
+RBAC integration adds only vault-scoped role assignments.
+
+The deployer needs policy-write permission for policy-based vaults and
+role-assignment/custom-role-definition write permissions for RBAC vaults.
+Storage, Service Bus, Event Grid, and monitoring still require RBAC. Preflight
+reads configuration and topics only; it cannot establish worker data access or
+permission propagation. Verify actual access before activation.
+
+Microsoft supports both models but recommends RBAC for separation of duties:
+vault-write control lets principals grant themselves data permissions under
+access policies. Accepting the customer policy model does not remove that risk.
+See [official authorization references](references.md) and
+[managed-vault upgrade/ownership rules](deployment-bicep.md#vault-authorization).
 
 ## Bicep configuration
 
@@ -125,7 +166,8 @@ Use [the Portal guide](deployment-portal.md) with these substitutions:
    them; confirm all compatibility gates without changing their properties.
 2. Create the same four vault endpoints, choosing the existing vault IDs. Existing
    approvals and application network paths remain intact.
-3. Assign IAM on the actual vault resources, not on the solution groups.
+3. Add worker access policies or IAM role assignments according to each vault's
+   current model, on the actual vault resources rather than solution groups.
 4. Reuse an existing system topic with a system-assigned identity rather than
    creating another. Add a dedicated, uniquely named subscription with the
    `mrkv-replication` label; leave other subscriptions unchanged.

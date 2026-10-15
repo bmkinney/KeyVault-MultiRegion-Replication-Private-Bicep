@@ -12,6 +12,11 @@ param alertEmail string
 param tags object
 @description('Same-subscription existing vault ARM ID; empty creates a new vault.')
 param existingVaultResourceId string = ''
+@description('Authorization for a solution-managed vault; ignored for a reused vault.')
+@allowed(['accessPolicy', 'rbac'])
+param vaultAuthorizationModel string = 'accessPolicy'
+@description('Opposite-region worker identity, created before either vault.')
+param replicaWriterPrincipalId string
 @description('Existing system topic ARM ID; empty creates a dedicated topic if none exists.')
 param existingSystemTopicResourceId string = ''
 
@@ -81,11 +86,26 @@ resource links 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01
   }
 }]
 
-resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' = {
+resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
   name: 'id-${prefix}-worker'
-  location: location
-  tags: tags
 }
+
+var workerPolicies = [
+  {
+    tenantId: subscription().tenantId
+    objectId: identity.properties.principalId
+    permissions: {
+      secrets: ['get', 'list']
+    }
+  }
+  {
+    tenantId: subscription().tenantId
+    objectId: replicaWriterPrincipalId
+    permissions: {
+      secrets: ['get', 'list', 'set']
+    }
+  }
+]
 
 resource vault 'Microsoft.KeyVault/vaults@2026-02-01' = if (empty(existingVaultResourceId)) {
   name: 'kv-${prefix}'
@@ -97,7 +117,8 @@ resource vault 'Microsoft.KeyVault/vaults@2026-02-01' = if (empty(existingVaultR
       family: 'A'
       name: 'standard'
     }
-    enableRbacAuthorization: true
+    enableRbacAuthorization: vaultAuthorizationModel == 'rbac'
+    accessPolicies: vaultAuthorizationModel == 'rbac' ? [] : workerPolicies
     enableSoftDelete: true
     softDeleteRetentionInDays: 90
     enablePurgeProtection: true
@@ -483,6 +504,8 @@ output vaultId string = selectedVaultId
 output vaultName string = empty(existingVaultResourceId) ? vault!.name : referencedVault!.name
 output vaultUri string = selectedVaultUri
 output vaultResourceGroup string = empty(existingVaultResourceId) ? resourceGroup().name : split(existingVaultResourceId, '/')[4]
+output vaultUsesRbac bool = empty(existingVaultResourceId) ? vaultAuthorizationModel == 'rbac' : (referencedVault!.properties.?enableRbacAuthorization ?? false)
+output vaultTenantId string = empty(existingVaultResourceId) ? subscription().tenantId : referencedVault!.properties.tenantId
 output principalId string = identity.properties.principalId
 output clientId string = identity.properties.clientId
 output storageId string = accounts[0].id

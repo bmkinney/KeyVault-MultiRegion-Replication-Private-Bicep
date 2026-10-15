@@ -23,17 +23,180 @@ def of_type(kind):
     return [resource for resource in ALL_RESOURCES if resource["type"].lower() == kind.lower()]
 
 
+def deployment(name):
+    return next(resource for resource in TEMPLATE["resources"]
+                if resource["type"] == "Microsoft.Resources/deployments" and resource["name"] == name)
+
+
+def module_id(side, name):
+    return (
+        "extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', "
+        f"subscription().subscriptionId, format('rg-{{0}}', variables('{side}Prefix'))), "
+        f"'Microsoft.Resources/deployments', '{side}-{name}')"
+    )
+
+
+def module_reference(side, name):
+    return f"reference({module_id(side, name)}, '2025-04-01')"
+
+
 class InfrastructureTests(unittest.TestCase):
-    def test_vaults_are_private_rbac_purge_protected(self):
+    def test_vaults_are_private_with_explicit_authorization_and_purge_protection(self):
         vaults = of_type("Microsoft.KeyVault/vaults")
         self.assertEqual(len(vaults), 2)
         for vault in vaults:
             props = vault["properties"]
-            self.assertTrue(props["enableRbacAuthorization"])
+            self.assertEqual(
+                props["enableRbacAuthorization"],
+                "[equals(parameters('vaultAuthorizationModel'), 'rbac')]",
+            )
             self.assertTrue(props["enablePurgeProtection"])
             self.assertEqual(props["softDeleteRetentionInDays"], 90)
             self.assertEqual(props["publicNetworkAccess"], "Disabled")
             self.assertEqual(props["networkAcls"]["bypass"], "None")
+
+    def test_authorization_defaults_and_independent_model_parameters(self):
+        for side in ("primary", "secondary"):
+            parameter = TEMPLATE["parameters"][f"{side}VaultAuthorizationModel"]
+            self.assertEqual(parameter["defaultValue"], "accessPolicy")
+            self.assertEqual(parameter["allowedValues"], ["accessPolicy", "rbac"])
+            foundation = deployment(f"{side}-foundation")["properties"]
+            self.assertEqual(
+                foundation["parameters"]["vaultAuthorizationModel"]["value"],
+                f"[parameters('{side}VaultAuthorizationModel')]",
+            )
+            model = foundation["template"]["parameters"]["vaultAuthorizationModel"]
+            self.assertEqual(model["defaultValue"], "accessPolicy")
+            self.assertEqual(model["allowedValues"], ["accessPolicy", "rbac"])
+
+    def test_reused_vault_model_and_tenant_are_detected_with_legacy_policy_fallback(self):
+        existing_reference = (
+            "reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', "
+            "subscription().subscriptionId, if(empty(parameters('existingVaultResourceId')), "
+            "resourceGroup().name, split(parameters('existingVaultResourceId'), '/')[4])), "
+            "'Microsoft.KeyVault/vaults', last(split(parameters('existingVaultResourceId'), '/'))), "
+            "'2026-02-01')"
+        )
+        for side in ("primary", "secondary"):
+            outputs = deployment(f"{side}-foundation")["properties"]["template"]["outputs"]
+            self.assertEqual(
+                outputs["vaultUsesRbac"]["value"],
+                "[if(empty(parameters('existingVaultResourceId')), "
+                "equals(parameters('vaultAuthorizationModel'), 'rbac'), "
+                f"coalesce(tryGet({existing_reference}, 'enableRbacAuthorization'), false()))]",
+            )
+            self.assertEqual(
+                outputs["vaultTenantId"]["value"],
+                "[if(empty(parameters('existingVaultResourceId')), "
+                f"subscription().tenantId, {existing_reference}.tenantId)]",
+            )
+            main_outputs = TEMPLATE["outputs"][f"{side}Resources"]["value"]
+            self.assertEqual(
+                main_outputs["vaultAuthorizationModel"],
+                f"[if({module_reference(side, 'foundation')}.outputs.vaultUsesRbac.value, 'rbac', 'accessPolicy')]",
+            )
+            self.assertEqual(
+                main_outputs["identityPrincipalId"],
+                f"[{module_reference(side, 'foundation')}.outputs.principalId.value]",
+            )
+
+    def test_vault_grants_use_effective_model_tenant_and_correct_worker_principals(self):
+        for side, other in (("primary", "secondary"), ("secondary", "primary")):
+            parameters = deployment(f"{side}-vault-access")["properties"]["parameters"]
+            for parameter, output in (
+                ("useRbac", "vaultUsesRbac"), ("tenantId", "vaultTenantId"),
+                ("vaultName", "vaultName"), ("readerPrincipalId", "principalId"),
+            ):
+                self.assertEqual(
+                    parameters[parameter]["value"],
+                    f"[{module_reference(side, 'foundation')}.outputs.{output}.value]",
+                )
+            self.assertEqual(
+                parameters["writerPrincipalId"]["value"],
+                f"[{module_reference(other, 'foundation')}.outputs.principalId.value]",
+            )
+
+    def test_access_policies_are_additive_and_exactly_secret_read_or_replica_write(self):
+        policies = of_type("Microsoft.KeyVault/vaults/accessPolicies")
+        self.assertEqual(len(policies), 2)
+        for policy in policies:
+            self.assertEqual(policy["condition"], "[not(parameters('useRbac'))]")
+            self.assertEqual(policy["name"], "[format('{0}/{1}', parameters('vaultName'), 'add')]")
+            self.assertEqual(policy["properties"]["accessPolicies"], [
+                {
+                    "tenantId": "[parameters('tenantId')]",
+                    "objectId": "[parameters('readerPrincipalId')]",
+                    "permissions": {"secrets": ["get", "list"]},
+                },
+                {
+                    "tenantId": "[parameters('tenantId')]",
+                    "objectId": "[parameters('writerPrincipalId')]",
+                    "permissions": {"secrets": ["get", "list", "set"]},
+                },
+            ])
+
+    def test_managed_vaults_keep_complete_worker_policies_on_redeployment(self):
+        identities = of_type("Microsoft.ManagedIdentity/userAssignedIdentities")
+        self.assertEqual(len(identities), 2)
+        for identity in identities:
+            self.assertEqual(identity["name"], "[format('id-{0}-worker', parameters('prefix'))]")
+        for side, other in (("primary", "secondary"), ("secondary", "primary")):
+            identity_deployment = deployment(f"{side}-worker-identity")
+            self.assertEqual(identity_deployment["resourceGroup"],
+                             f"[format('rg-{{0}}', variables('{side}Prefix'))]")
+            self.assertEqual(identity_deployment["properties"]["parameters"]["prefix"]["value"],
+                             f"[variables('{side}Prefix')]")
+            foundation = deployment(f"{side}-foundation")
+            for worker_side in ("primary", "secondary"):
+                self.assertIn(f"[{module_id(worker_side, 'worker-identity')}]", foundation["dependsOn"])
+            properties = foundation["properties"]
+            self.assertEqual(
+                properties["parameters"]["replicaWriterPrincipalId"]["value"],
+                f"[{module_reference(other, 'worker-identity')}.outputs.principalId.value]",
+            )
+            nested = properties["template"]
+            reader = (
+                "createObject('tenantId', subscription().tenantId, 'objectId', "
+                "reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', "
+                "format('id-{0}-worker', parameters('prefix'))), '2024-11-30').principalId, "
+                "'permissions', createObject('secrets', createArray('get', 'list')))"
+            )
+            writer = (
+                "createObject('tenantId', subscription().tenantId, 'objectId', "
+                "parameters('replicaWriterPrincipalId'), 'permissions', "
+                "createObject('secrets', createArray('get', 'list', 'set')))"
+            )
+            vault = next(resource for resource in nested["resources"] if resource["type"] == "Microsoft.KeyVault/vaults")
+            self.assertEqual(
+                vault["properties"]["accessPolicies"],
+                "[if(equals(parameters('vaultAuthorizationModel'), 'rbac'), createArray(), "
+                f"createArray({reader}, {writer}))]",
+            )
+
+    def test_rbac_grants_and_role_definition_are_gated_by_effective_model(self):
+        role = deployment("[format('{0}-{1}-replica-writer-role', parameters('workload'), variables('token'))]")
+        self.assertEqual(
+            role["properties"]["parameters"]["enabled"]["value"],
+            f"[or({module_reference('primary', 'foundation')}.outputs.vaultUsesRbac.value, "
+            f"{module_reference('secondary', 'foundation')}.outputs.vaultUsesRbac.value)]",
+        )
+        definition = of_type("Microsoft.Authorization/roleDefinitions")[0]
+        self.assertEqual(definition["condition"], "[parameters('enabled')]")
+        self.assertEqual(definition["name"], "[guid(subscription().id, parameters('workload'), 'secret-replica-writer')]")
+        for side in ("primary", "secondary"):
+            access = deployment(f"{side}-vault-access")["properties"]["template"]
+            assignments = [resource for resource in access["resources"]
+                           if resource["type"] == "Microsoft.Authorization/roleAssignments"]
+            self.assertEqual(len(assignments), 1)
+            self.assertEqual(assignments[0]["condition"], "[parameters('useRbac')]")
+            self.assertEqual(assignments[0]["scope"], "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]")
+            self.assertEqual(access["variables"]["assignments"], [
+                {
+                    "principal": "[parameters('readerPrincipalId')]",
+                    "role": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]",
+                },
+                {"principal": "[parameters('writerPrincipalId')]", "role": "[parameters('writerRoleId')]"},
+            ])
 
     def test_storage_uses_zrs_and_no_keys_or_public_data(self):
         accounts = of_type("Microsoft.Storage/storageAccounts")

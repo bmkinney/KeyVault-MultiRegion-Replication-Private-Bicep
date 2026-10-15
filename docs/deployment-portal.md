@@ -81,8 +81,13 @@ To reuse one or both vaults, follow [existing-vault integration](existing-vaults
 instead of creating those resources. Preserve their configuration and diagnostic
 settings, and use their actual IDs/URIs for endpoints, IAM, events, and workers.
 
-Create one Standard vault per region. On access configuration choose **Azure
-role-based access control**. Enable purge protection and 90-day soft-delete
+Create one Standard vault per region. On access configuration explicitly choose
+**Vault access policy** for this sample's default, or **Azure role-based access
+control** for either vault if required. Do not rely on the wizard/API default,
+and do not switch an existing vault's model as part of integration. Mixed pairs
+are supported. Microsoft recommends RBAC because vault-write principals can
+grant themselves data access under the access-policy model.
+Enable purge protection and 90-day soft-delete
 retention. Do not enable VM deployment, disk encryption, or ARM template
 secret access. Disable public network access and trusted-service bypass.
 
@@ -206,7 +211,7 @@ the `foundation` object with the following existing values:
 ```
 
 Create the action group from section 10 before using this fallback. Assign the
-vault roles from section 8 before starting the app. Review the resource changes
+vault permissions from section 8 before starting the app. Review the resource changes
 and submit only with deployment approval. Repeat for the other region with its
 local foundation and reversed source/destination. Do not also create the same
 app manually. This fallback starts with public app access disabled and all
@@ -243,9 +248,40 @@ Remove legacy host/deployment connection strings after identity configuration
 works; they are not used by this implementation. Do not add
 WEBSITE_RUN_FROM_PACKAGE, Azure Files settings, or EP1 runtime app settings.
 
-## 8. Assign vault roles and publish code
+## 8. Assign vault permissions and publish code
 
-In subscription IAM, create a custom role named `<prefix> Secret Replica Writer`.
+Follow the branch matching **each vault's current access configuration**.
+Managed identities use the same worker code with either model. The reverse
+worker's write grant is preassigned for recovery, not permission to enable both
+workers simultaneously.
+
+### Vault access policy (default)
+
+On each vault's **Access policies** page, choose **Create** and select only these
+**Secret permissions**. Select the user-assigned managed identity by name and
+verify its principal/object ID against the naming worksheet, then save the policy.
+Do not use its client ID as an object ID or select application permissions
+for a different principal.
+
+| Principal | Vault | Secret permissions |
+| --- | --- | --- |
+| Primary worker | Primary vault | Get, List |
+| Primary worker | Secondary vault | Get, List, Set |
+| Secondary worker | Secondary vault | Get, List |
+| Secondary worker | Primary vault | Get, List, Set |
+
+Set covers both creating secret versions and updating attributes (including
+disable). There is no separate Update policy permission. Leave key/certificate,
+delete, purge, backup, and restore permissions unselected. Add/update only these
+worker entries; preserve unrelated existing policies. Both identities must be
+in the vault's tenant; policy capacity is 1,024 entries. The operator needs
+`Microsoft.KeyVault/vaults/accessPolicies/write`; a Key Vault RBAC data role is
+not a substitute on a policy-based vault.
+
+### Azure RBAC (alternative)
+
+If either vault uses RBAC, in subscription IAM create a custom role named
+`<prefix> Secret Replica Writer`.
 Under its permissions JSON use empty Actions/NotActions/NotDataActions and these
 DataActions only:
 
@@ -269,7 +305,14 @@ does not grant subscription-wide secret access merely by defining the role.
 | Secondary worker | Secondary vault | Key Vault Secrets User |
 | Secondary worker | Primary vault | Custom Secret Replica Writer |
 
-Wait for RBAC propagation and verify each role's scope.
+Apply only the rows whose target vault uses RBAC. For example, a policy-based
+primary and RBAC secondary need policies on primary and role assignments on
+secondary. Do not change the vault model or grant both kinds of access to
+work around a denial.
+
+Wait for RBAC propagation where applicable and verify actual worker secret access
+under each selected model. Storage, Service Bus, Event Grid delivery, and
+monitoring retain their RBAC assignments regardless of vault configuration.
 Publish original code using `scripts\Publish-Functions.ps1` or the supported
 VS Code/Core Tools procedure from a privately connected machine. This step
 does not require Bicep. Verify both functions are discovered.

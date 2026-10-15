@@ -6,19 +6,21 @@
 | Package publication fails | Publisher private routing, app/SCM DNS, supported Core Tools, package-feed/build connectivity | Enable public SCM or Basic auth |
 | Service Bus listener denied | Local Data Receiver scope, identity client ID, namespace DNS, role propagation | Grant sender/owner rights to both namespaces |
 | Event Grid cannot deliver | System identity, namespace Data Sender, trusted-service bypass, muted subject filter | Assume it delivers through the namespace endpoint |
-| Secret get/set denied | Source Secrets User, destination custom Replica Writer, source status, both local vault DNS records | Default an unknown source to primary |
+| Secret get/set denied | Actual vault model; policy Get/List on source and Get/List/Set on destination, or RBAC Secrets User/custom Replica Writer; worker principal ID, propagation, source status, both local vault DNS records | Switch authorization models, grant broad rights, or default an unknown source to primary |
 | Secret tag limit | At most 12 user tags plus 3 reserved tags | Drop user tags silently |
 | Ambiguous unreadable version | Multiple source versions share creation time; inspect latest state manually | Guess a newest version GUID |
 | Old state temporarily visible | Source changed during processing; inspect next event/reconciliation | Claim atomic cross-vault consistency |
 | Metadata-only update delayed | Five-minute reconciliation and heartbeat | Claim all changes meet the event latency target |
 | Replica was manually edited | Restrict replica writers and inspect lineage | Trust tags to detect arbitrary value tampering |
-| Existing-vault preflight fails | Same subscription, matching region, RBAC, private access, purge protection, source-topic reuse | Silently change authorization/network settings or create a duplicate topic |
+| Existing-vault preflight fails | Same subscription, matching region, valid RBAC/access-policy model, private access, purge protection, source-topic reuse | Silently change authorization/network settings or create a duplicate topic |
+| Extra policies disappear after managed-vault redeploy | Template owns the complete managed-vault policy list; use existing-vault reference mode to preserve externally managed policies | Claim additive integration preserves policies on a vault still managed by a full PUT |
+| Earlier managed RBAC vault would change model | Explicitly pin the corresponding model parameters to `rbac` before redeploying with new defaults | Treat a default change as an approved authorization migration |
 | No names/prefix selected on a reused vault | Supply allowlist/prefix or explicitly opt into all secrets | Treat an empty prefix as permission to copy everything |
 | Unmanaged destination name collision | Review ownership, narrow selection, explicitly approve replacement only if intended | Automatically overwrite or disable an unrelated secret |
 | Source missing | Deleted/missing secret; review replica revocation explicitly | Automatically purge destination |
 | Lease contention | Another invocation is working; check retries/DLQ and reconciliation | Remove a live lock blindly |
 | Telemetry missing | AMPLS membership, five DNS-zone registrations, Metrics Publisher, Entra app setting | Reenable public ingestion/query |
-| Portal cannot read secret/blob | Browser/client machine private connectivity plus data-plane role | Treat Contributor as a secret-read role |
+| Portal cannot read secret/blob | Browser/client machine private connectivity plus matching vault policy/RBAC grant; Storage still uses RBAC | Treat control-plane access as proof of data-plane readiness |
 | Alerts without email | Populate and test the approved action-group receiver | Treat a created alert as delivered notification |
 
 SDK HTTP logging is disabled. Application errors report the exception type,
