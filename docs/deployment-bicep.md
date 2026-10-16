@@ -97,7 +97,8 @@ confirm existing policy capacity (maximum 1,024 entries) and effective permissio
 
 For a solution-managed vault, the template owns its complete policy list. Both
 identities are created first so vault creation/redeployment includes both worker
-grants rather than clearing the list and restoring them later. Extra policies
+grants rather than clearing the list and restoring them later. Managed vaults do
+not also receive a redundant child `accessPolicies/add` deployment. Extra policies
 added outside this template are not preserved on a managed-vault redeployment.
 Use [existing-vault reference mode](existing-vaults.md) for shared vaults or to
 retain externally managed application/operator policies. Assign any temporary
@@ -164,7 +165,11 @@ This performs validation and preview only. Then, if approved:
 
 `-Apply` reruns discovery, validation, and the coverage gate before creation;
 review a fresh preview whenever parameters or existing configuration change.
-No staged identity deployment or manual template changes are required.
+Managed-vault policies do not require a separate identity-bootstrap deployment
+or user template changes. First-time integration with an existing policy-based
+vault can still be blocked if Azure cannot predict its additive policy update
+while worker principal IDs are unresolved; this is not permission to bypass the
+coverage gate.
 
 Do not reuse names to "adopt" preexisting vaults. Supply their full resource IDs
 through the explicit existing-vault parameters instead. Existing resources are

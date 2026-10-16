@@ -156,6 +156,12 @@ the authoritative worker/route and verify reconciliation.
 The runner rejects incomplete coverage even if Azure CLI returns exit 0. A
 short-circuited foundation is not a successful preview and cannot be overridden
 with `-Apply`; see [what-if troubleshooting](troubleshooting.md#incomplete-what-if-coverage).
+Unlike managed vaults, reused policy-based vaults must retain the additive child
+operation to preserve unrelated policies. On first-time integration, unresolved
+principal IDs for newly created workers can make that operation `Unsupported`
+even after every module expands. This remains a blocking preview limitation;
+the runner neither provisions identities during a preview nor silently accepts
+the unsupported policy update.
 
 ## Existing Event Grid topics
 

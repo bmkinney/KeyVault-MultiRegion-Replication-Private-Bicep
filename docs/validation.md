@@ -194,3 +194,34 @@ CLEAN**; live zero-diagnostic what-if, deployment, and data-plane behavior
 These local checks eliminate the identified wiring pattern but cannot guarantee
 noise-free analysis or provider acceptance in every subscription. The runner
 blocks rather than silently applying if live preview coverage is still incomplete.
+
+### User-run feedback: redundant managed-vault policies (2026-10-16)
+
+The supplied live preview expanded the regional topology: **160 Create, 2
+Unsupported, no Modify/Delete, and no diagnostics/potential changes**. Both vault
+resource-ID parameters were empty, both selected models were access policies,
+and both worker/routing flags were false. This was a new/new-vault test, not
+evidence of existing-vault integration. The two unsupported resources were the
+managed vaults' redundant `accessPolicies/add` children. Azure could not resolve
+their worker principal IDs before deployment. Both managed vault definitions
+already included the same two least-privilege policy entries.
+
+The correction gates child policy updates to explicitly reused, non-RBAC vaults.
+Managed vaults keep their complete inline grants, RBAC assignments remain
+available for both new and reused vaults, and the deployment runner's
+Unsupported-result blocking is unchanged. No user parameter or identity ID is
+added. The attached transcript and its environment identifiers are not committed.
+
+Existing access-policy integration can still encounter an Unsupported additive
+update when new worker principal IDs are not yet available. This fix removes
+redundancy for managed vaults; it does not claim that Azure can predict every
+existing-vault policy update. No automatic identity bootstrap or preview bypass
+is introduced.
+
+Local follow-up validation: main and both example parameter files compile with
+exit 0; **22 compiled-template tests pass**, including the new existing-only
+policy guard, preserved complete managed-vault policies, and unchanged RBAC
+conditions. Unsuppressed Checkov remains **59 passed / 14 failed / 0 skipped /
+0 parsing errors, exit 1**, with the same seven reviewed rule IDs. The runner,
+Python discovery, and Portal Function module are unchanged. A fresh live preview
+after this correction has not been run, and no Azure resources were changed.

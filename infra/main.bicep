@@ -233,6 +233,7 @@ module primaryVaultAccess './modules/vault-access.bicep' = {
   scope: resourceGroup(empty(primaryVaultResourceId) ? primaryGroup.name : split(primaryVaultResourceId, '/')[4])
   params: {
     vaultName: stamps[0].vaultName
+    isExistingVault: !empty(primaryVaultResourceId)
     useRbac: stamps[0].vaultUsesRbac
     tenantId: stamps[0].vaultTenantId
     readerIdentityResourceId: stamps[0].identityId
@@ -248,6 +249,7 @@ module secondaryVaultAccess './modules/vault-access.bicep' = {
   scope: resourceGroup(empty(secondaryVaultResourceId) ? secondaryGroup.name : split(secondaryVaultResourceId, '/')[4])
   params: {
     vaultName: stamps[1].vaultName
+    isExistingVault: !empty(secondaryVaultResourceId)
     useRbac: stamps[1].vaultUsesRbac
     tenantId: stamps[1].vaultTenantId
     readerIdentityResourceId: stamps[1].identityId

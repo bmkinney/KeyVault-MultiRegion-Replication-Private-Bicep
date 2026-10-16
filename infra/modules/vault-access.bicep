@@ -1,5 +1,7 @@
-@description('Existing vault name.')
+@description('Selected vault name.')
 param vaultName string
+@description('True only for vaults selected by resource ID. Managed vaults already include their complete policies in the foundation PUT.')
+param isExistingVault bool
 @description('Actual authorization model, discovered from reused vaults without changing it.')
 param useRbac bool
 @description('Tenant ID of the selected vault.')
@@ -51,7 +53,7 @@ resource access 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for assi
   }
 }]
 
-resource policies 'Microsoft.KeyVault/vaults/accessPolicies@2026-02-01' = if (!useRbac) {
+resource policies 'Microsoft.KeyVault/vaults/accessPolicies@2026-02-01' = if (isExistingVault && !useRbac) {
   parent: vault
   name: 'add'
   properties: {
