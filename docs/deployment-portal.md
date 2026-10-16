@@ -197,7 +197,6 @@ the `foundation` object with the following existing values:
 ```json
 {
   "identityId": "<regional-worker-identity-ARM-ID>",
-  "identityClientId": "<regional-worker-client-ID>",
   "storageName": "<runtime-storage-name>",
   "storageBlobUri": "https://<runtime-storage-name>.blob.core.windows.net/",
   "busNamespace": "<regional-namespace>.servicebus.windows.net",
@@ -205,10 +204,15 @@ the `foundation` object with the following existing values:
   "endpointSubnetId": "<regional-vnet-ARM-ID>/subnets/endpoints",
   "appDnsZoneId": "<regional-private-DNS-zone-ARM-ID-for-privatelink.azurewebsites.net>",
   "workspaceId": "<regional-workspace-ARM-ID>",
-  "insightsConnectionString": "<regional-Application-Insights-connection-string>",
+  "insightsId": "<regional-Application-Insights-ARM-ID>",
   "actionGroupId": "<approved-action-group-ARM-ID>"
 }
 ```
+
+The fallback resolves the identity client ID and Application Insights connection
+string internally from these ARM IDs; do not supply those runtime values in
+the `foundation` object. The manually configured app-settings table below still
+uses the actual client ID/connection string when not using this fallback.
 
 Create the action group from section 10 before using this fallback. Assign the
 vault permissions from section 8 before starting the app. Review the resource changes

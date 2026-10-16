@@ -154,3 +154,43 @@ existing-vault preservation assertions **PASS**; Checkov **REVIEWED, NOT CLEAN**
 live access-policy/RBAC propagation, operator permissions, deployment/Portal
 parity, and mixed-model failover **PENDING**. No Azure resource was queried or
 changed, and no new runtime or certificate behavior is claimed by these checks.
+
+## Complete-preview wiring (2026-10-16)
+
+Replaced runtime-output module inputs throughout the dependency graph with
+deterministic resource IDs and a read-only, runner-generated existing-vault
+snapshot. Resource properties resolve identity/telemetry values internally.
+Explicit dependencies preserve creation order. Read-only IAM inventory retains
+previous vault role-assignment names; new grants use identity ARM IDs as stable
+name seeds. Users configure only their local parameter file.
+
+The runner requires Azure CLI >=2.75.0, requests full JSON what-if, and rejects
+diagnostics, ignored/unsupported/unevaluated resources, potential/paginated
+results, errors, and malformed output before create. `-Apply` cannot bypass
+that gate. The same temporary prepared parameters are used for validate,
+what-if, and create, and removed on success or failure.
+
+| Check | Actual result |
+| --- | --- |
+| `az bicep build` main and Portal Function module; `az bicep build-params` both examples | Exit 0, no diagnostics; tracked Portal fallback regenerated |
+| `python -m unittest discover -s .\tests\unit -q` | 80 passed, including real PowerShell runner execution with local command doubles; no Azure calls |
+| `python .\tests\infrastructure\test_template.py .\.build\whatif-main.json -v` | 21 passed; recursively checks all module inputs and resource names/scopes/conditions/copy loops for transitive runtime functions |
+| New/existing/model combinations | All 16 combinations checked for read-only preflight and fresh prepared metadata |
+| Runner regressions | CLI/REST result envelopes; preview-only and explicit apply; property payload retained; shared prepared parameters; diagnostic/error/unsupported/malformed/old-CLI/command-failure blocking; temporary-file cleanup |
+| PowerShell parsing and `git diff --check` | Exit 0 |
+| Unsuppressed `checkov --file .\.build\whatif-main.json --framework arm --skip-download --compact --output json` | 59 passed, 14 failed, 0 skipped, 0 parsing errors; exit 1 |
+
+Checkov retains the same seven documented rule IDs and does not prove evaluation
+of the new runtime-selected property branches. No suppressions or severity
+clearance were added. The static regression excludes runtime functions from
+enumeration and module inputs, not from ordinary resource properties or public
+deployment outputs where runtime values are intentionally retained.
+
+Completion self-check: local compilation/regressions **PASS**; private/identity
+defaults and referenced-resource preservation **PASS**; original excluded clone
+untouched and infrastructure under `infra` **PASS**; Checkov **REVIEWED, NOT
+CLEAN**; live zero-diagnostic what-if, deployment, and data-plane behavior
+**PENDING**. No Azure resource was queried, deployed, or changed for this fix.
+These local checks eliminate the identified wiring pattern but cannot guarantee
+noise-free analysis or provider acceptance in every subscription. The runner
+blocks rather than silently applying if live preview coverage is still incomplete.

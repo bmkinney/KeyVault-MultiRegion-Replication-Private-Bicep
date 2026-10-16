@@ -8,7 +8,9 @@ Do not run deployment or live tests until the subscription owner authorizes them
 
 ## 1. Prerequisites and preflight
 
-Use Azure CLI with Bicep, PowerShell 7, Python, and GA Azure Functions Core Tools v4.
+Use Azure CLI **2.75.0 or newer** with Bicep, PowerShell 7, Python, and GA Azure
+Functions Core Tools v4. The CLI minimum exposes what-if coverage diagnostics;
+the runner rejects older versions rather than silently losing that safety check.
 Publish from a machine with private connectivity and DNS to the target app and
 storage. A VPN-connected workstation or an approved private runner is suitable.
 Default public Cloud Shell and ordinary public CI runners are not substitutes.
@@ -48,7 +50,9 @@ start with `infra\parameters\existing-vaults.example.bicepparam`. The deployment
 script performs read-only compatibility and topic-reuse preflight; Python must
 be available. Leave vault IDs empty to retain new-vault behavior.
 
-Edit `infra\parameters\example.bicepparam` or create your own local parameter file.
+Copy the appropriate example to `infra\parameters\deployment.local.bicepparam`
+(Git-ignored) and edit that file only. Do not change Bicep files or supply worker
+principal/client IDs: the template creates both identities automatically.
 Set a real `alertEmail` before operational use. Do not commit personal recipients
 if your organization treats them as private information.
 
@@ -121,12 +125,46 @@ RBAC; assignments are made only on RBAC vaults.
 .\scripts\Deploy.ps1 -SubscriptionId '<subscription-id>'
 ```
 
-This performs ARM validation and what-if only. Review every create/modify/delete
-and confirm no unrelated resource is changed. Then, if approved:
+For a local parameter file, use:
 
 ```powershell
-.\scripts\Deploy.ps1 -SubscriptionId '<subscription-id>' -Apply
+.\scripts\Deploy.ps1 -SubscriptionId '<subscription-id>' `
+  -ParametersFile .\infra\parameters\deployment.local.bicepparam
 ```
+
+The runner compiles this file and performs read-only discovery of reused-vault
+authorization models, tenant IDs, and vault URIs. When either vault uses RBAC,
+it also inventories existing solution-worker identities and their vault role
+assignments. Previously deployed assignment names are retained to avoid
+`RoleAssignmentExists`; new assignments use deterministic vault/identity ARM
+IDs and role IDs, not runtime principal IDs.
+
+Discovery populates internal `resolvedExistingVaults` and
+`resolvedVaultRoleAssignments` parameters in a temporary JSON file. **Do not add
+these parameters to your `.bicepparam` file.** The runner refreshes them on each
+invocation, leaves the user file untouched, and removes temporary files on exit.
+ARM validation, what-if, and optional create all use that same prepared snapshot.
+Keep the vault authorization/configuration stable during the run. Direct existing-
+vault deployment without discovery is not the supported workflow.
+
+The preview is full-payload JSON, including property changes, rather than the
+CLI's colored summary. Review every create/modify/delete and confirm no unrelated
+resource is changed. Any diagnostics, ignored/unsupported/unevaluated resources,
+additional potential/paginated results, malformed output, or failed command
+blocks deployment, **even with `-Apply`**. There is no incomplete-preview override.
+Unknown runtime property differences may still appear; complete module expansion
+does not mean that every property's final value is predictable.
+
+This performs validation and preview only. Then, if approved:
+
+```powershell
+.\scripts\Deploy.ps1 -SubscriptionId '<subscription-id>' `
+  -ParametersFile .\infra\parameters\deployment.local.bicepparam -Apply
+```
+
+`-Apply` reruns discovery, validation, and the coverage gate before creation;
+review a fresh preview whenever parameters or existing configuration change.
+No staged identity deployment or manual template changes are required.
 
 Do not reuse names to "adopt" preexisting vaults. Supply their full resource IDs
 through the explicit existing-vault parameters instead. Existing resources are

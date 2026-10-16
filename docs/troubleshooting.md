@@ -13,6 +13,7 @@
 | Metadata-only update delayed | Five-minute reconciliation and heartbeat | Claim all changes meet the event latency target |
 | Replica was manually edited | Restrict replica writers and inspect lineage | Trust tags to detect arbitrary value tampering |
 | Existing-vault preflight fails | Same subscription, matching region, valid RBAC/access-policy model, private access, purge protection, source-topic reuse | Silently change authorization/network settings or create a duplicate topic |
+| What-if reports short-circuited/skipped resources | Latest templates and runner, Azure CLI >=2.75.0, automatic discovery permissions, detailed diagnostic code | Apply an incomplete preview or manually wire generated principal IDs into templates |
 | Extra policies disappear after managed-vault redeploy | Template owns the complete managed-vault policy list; use existing-vault reference mode to preserve externally managed policies | Claim additive integration preserves policies on a vault still managed by a full PUT |
 | Earlier managed RBAC vault would change model | Explicitly pin the corresponding model parameters to `rbac` before redeploying with new defaults | Treat a default change as an approved authorization migration |
 | No names/prefix selected on a reused vault | Supply allowlist/prefix or explicitly opt into all secrets | Treat an empty prefix as permission to copy everything |
@@ -29,3 +30,25 @@ not service response bodies or secret values. Keep diagnostic artifacts value-fr
 A complete region outage can block source reads and event emission. A private
 endpoint in the healthy region does not resurrect the failed vault. Use the
 promotion procedure and report the actual recovery boundary.
+
+## Incomplete what-if coverage
+
+`NestedDeploymentShortCircuited` means a nested deployment was skipped, not that
+its resources need no changes. Azure can return exit 0 while omitting most of
+the topology. `Deploy.ps1` therefore checks structured result status, diagnostics,
+resource change types, and additional results, and blocks incomplete previews
+before create, even when `-Apply` is present.
+
+Pull the latest repository revision and continue using only your local
+`.bicepparam` file with the supported runner. Modules exchange deterministic
+resource IDs and discovered existing-vault metadata. Principal IDs and telemetry
+properties are resolved inside resource properties, with explicit execution
+dependencies retained. No identity-bootstrap deployment, generated-ID parameter,
+or user template edit is needed.
+
+If diagnostics remain, retain their exact codes/resource paths and the complete
+JSON preview for investigation; remove customer identifiers before sharing.
+There is no bypass switch. Unknown property values can still produce prediction
+noise, and local compilation/mocked tests do not prove a diagnostic-free live
+what-if in every subscription. Resolve the reported provider/analysis limitation
+rather than treating a partial resource count as approval.

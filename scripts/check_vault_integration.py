@@ -1,11 +1,14 @@
 """Read-only existing-vault preflight. Never retrieves secret values or changes Azure."""
 
 import argparse
+import copy
 import json
 import re
 import shutil
 import subprocess
 from pathlib import Path
+from urllib.parse import urlsplit
+from uuid import UUID
 
 RESOURCE_ID = re.compile(
     r"^/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/"
@@ -66,6 +69,7 @@ def preflight(parameters, subscription, query=azure_json):
         if value(f"{side}VaultAuthorizationModel", "accessPolicy") not in ("accessPolicy", "rbac"):
             raise ValueError(f"{side}VaultAuthorizationModel must be accessPolicy or rbac")
     topics = None
+    resolved_vaults = {}
     for side, vault_id in zip(("primary", "secondary"), vault_ids):
         topic_id = value(f"{side}SystemTopicResourceId", "")
         if topic_id and not vault_id:
@@ -78,10 +82,31 @@ def preflight(parameters, subscription, query=azure_json):
         if vault["location"].lower() != value(f"{side}Location", "eastus" if side == "primary" else "centralus").lower():
             raise ValueError(f"{side}Location must match the existing vault region")
         model = authorization_model(props)
+        if vault.get("id", "").lower() != vault_id.lower():
+            raise ValueError("Azure returned a different vault resource ID")
+        tenant_id, vault_uri = props.get("tenantId"), props.get("vaultUri")
+        if not isinstance(tenant_id, str):
+            raise ValueError("Existing vault tenantId is missing")
+        UUID(tenant_id)
+        if not isinstance(vault_uri, str):
+            raise ValueError("Existing vault vaultUri is missing")
+        uri = urlsplit(vault_uri)
+        if (
+            uri.scheme != "https" or not uri.hostname
+            or not uri.hostname.lower().startswith(vault_id.split("/")[-1].lower() + ".")
+            or uri.username is not None or uri.password is not None
+            or uri.port not in (None, 443) or uri.path not in ("", "/") or uri.query or uri.fragment
+        ):
+            raise ValueError("Existing vault vaultUri must be its HTTPS service root")
         if props.get("enablePurgeProtection") is not True or props.get("enableSoftDelete") is False:
             raise ValueError("Existing vault must have soft delete and purge protection")
         if (props.get("publicNetworkAccess") or "Enabled").lower() != "disabled":
             raise ValueError("Existing vault must already disable public access; shared access is never changed automatically")
+        resolved_vaults[vault_id.lower()] = {
+            "usesRbac": model == "rbac",
+            "tenantId": tenant_id,
+            "vaultUri": vault_uri.rstrip("/") + "/",
+        }
         if topics is None:
             topics = query("eventgrid", "system-topic", "list", "--subscription", subscription)
         source_topics = [topic for topic in topics if topic.get("source", topic.get("properties", {}).get("source", "")).lower() == vault_id.lower()]
@@ -132,14 +157,75 @@ def preflight(parameters, subscription, query=azure_json):
             ):
                 raise ValueError("A system topic already exists; supply its ARM ID instead of creating another")
         print(f"Existing {side} vault preflight passed ({model}; model preserved): {vault_id}")
+    return resolved_vaults
+
+
+def existing_role_assignment_names(workload, subscription, query):
+    identities = query("identity", "list", "--subscription", subscription)
+    owned = {}
+    for identity in identities:
+        match = re.fullmatch(rf"id-{re.escape(workload)}-([ps])-([a-z0-9]{{8}})-worker", identity["name"])
+        if not match:
+            continue
+        group = f"rg-{workload}-{match[1]}-{match[2]}"
+        expected = f"/subscriptions/{subscription}/resourceGroups/{group}/providers/Microsoft.ManagedIdentity/userAssignedIdentities/{identity['name']}"
+        if identity["id"].lower() != expected.lower():
+            continue
+        principal_id = identity.get("principalId", identity.get("properties", {}).get("principalId"))
+        if not isinstance(principal_id, str) or not principal_id:
+            raise ValueError("Existing worker identity has no principal ID")
+        UUID(principal_id)
+        owned[principal_id.lower()] = identity["id"]
+    if not owned:
+        return {}
+    assignments = query(
+        "role", "assignment", "list", "--subscription", subscription, "--all",
+        "--fill-principal-name", "false", "--fill-role-definition-name", "false",
+    )
+    names = {}
+    for assignment in assignments:
+        identity_id = owned.get(assignment.get("principalId", "").lower())
+        scope = assignment.get("scope", "")
+        if not identity_id or not RESOURCE_ID.fullmatch(scope) or "/microsoft.keyvault/vaults/" not in scope.lower():
+            continue
+        name, role_id = assignment["name"], assignment["roleDefinitionId"]
+        UUID(name)
+        key = f"{scope}|{identity_id}|{role_id}".lower()
+        if key in names and names[key] != name:
+            raise ValueError("Multiple existing role assignments match one worker, vault, and role")
+        names[key] = name
+    return names
+
+
+def prepare_parameters(document, subscription, query=azure_json):
+    prepared = copy.deepcopy(document)
+    parameters = prepared["parameters"]
+    resolved = preflight(parameters, subscription, query)
+    uses_rbac = any(vault["usesRbac"] for vault in resolved.values()) or any(
+        not parameters.get(f"{side}VaultResourceId", {}).get("value", "")
+        and parameters.get(f"{side}VaultAuthorizationModel", {}).get("value", "accessPolicy") == "rbac"
+        for side in ("primary", "secondary")
+    )
+    assignments = existing_role_assignment_names(
+        parameters.get("workload", {}).get("value", "mrkv"), subscription, query,
+    ) if uses_rbac else {}
+    parameters["resolvedExistingVaults"] = {"value": resolved}
+    parameters["resolvedVaultRoleAssignments"] = {"value": assignments}
+    return prepared
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--parameters", required=True)
     parser.add_argument("--subscription", required=True)
+    parser.add_argument("--output-parameters", help="Write temporary ARM parameters with fresh non-secret discovery results")
     args = parser.parse_args()
-    preflight(json.loads(Path(args.parameters).read_text(encoding="utf-8-sig"))["parameters"], args.subscription)
+    document = json.loads(Path(args.parameters).read_text(encoding="utf-8-sig"))
+    if args.output_parameters:
+        prepared = prepare_parameters(document, args.subscription)
+        Path(args.output_parameters).write_text(json.dumps(prepared, indent=2), encoding="utf-8")
+    else:
+        preflight(document["parameters"], args.subscription)
 
 
 if __name__ == "__main__":

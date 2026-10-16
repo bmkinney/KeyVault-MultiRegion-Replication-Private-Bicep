@@ -45,6 +45,10 @@ certify this custom application's behavior. Local and live tests are separate.
 | AMPLS association resource kind for the selected API | [Scoped resources 2023-06-01-preview](https://learn.microsoft.com/en-us/azure/templates/microsoft.insights/2023-06-01-preview/privatelinkscopes/scopedresources) |
 | Subscription deployments and cross-group modules | [Subscription-scope Bicep](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/deploy-to-subscription) |
 | Reference vaults/topics without recreating them | [Existing resources](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/existing-resource) |
+| Runtime module inputs can short-circuit preview; CLI 2.75.0 exposes diagnostics | [What-if short-circuiting](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/deploy-what-if#short-circuiting) |
+| Structured what-if status, changes, diagnostics, and potential changes | [Subscription what-if response](https://learn.microsoft.com/en-us/rest/api/resources/deployments/what-if-at-subscription-scope?view=rest-resources-2025-04-01) |
+| Preserve execution ordering after replacing implicit output dependencies | [Explicit dependencies](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/resource-dependencies#explicit-dependency) |
+| Read existing vault grants without Graph principal/name enrichment | [Role assignment list flags](https://learn.microsoft.com/en-us/cli/azure/role/assignment?view=azure-cli-latest#az-role-assignment-list) |
 | Resource name constraints | [Name rules](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules) |
 
 ## Well-Architected review

@@ -4,33 +4,48 @@ param vaultName string
 param useRbac bool
 @description('Tenant ID of the selected vault.')
 param tenantId string
-@description('Local source-reader identity principal ID.')
-param readerPrincipalId string
-@description('Opposite-region replica-writer identity principal ID.')
-param writerPrincipalId string
+@description('Local source-reader identity ARM ID.')
+param readerIdentityResourceId string
+@description('Opposite-region replica-writer identity ARM ID.')
+param writerIdentityResourceId string
 @description('Custom replica-writer role definition ID, excluding destructive secret operations.')
 param writerRoleId string
+@description('Previously deployed assignment names discovered by the deployment script.')
+param existingRoleAssignmentNames object = {}
 
 resource vault 'Microsoft.KeyVault/vaults@2026-02-01' existing = {
   name: vaultName
 }
 
+resource readerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
+  name: last(split(readerIdentityResourceId, '/'))
+  scope: resourceGroup(split(readerIdentityResourceId, '/')[4])
+}
+
+resource writerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
+  name: last(split(writerIdentityResourceId, '/'))
+  scope: resourceGroup(split(writerIdentityResourceId, '/')[4])
+}
+
+var readerRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
 var assignments = [
   {
-    principal: readerPrincipalId
-    role: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+    identityId: readerIdentityResourceId
+    role: readerRoleId
   }
   {
-    principal: writerPrincipalId
+    identityId: writerIdentityResourceId
     role: writerRoleId
   }
 ]
 
 resource access 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for assignment in assignments: if (useRbac) {
-  name: guid(vault.id, assignment.principal, assignment.role)
+  name: contains(existingRoleAssignmentNames, toLower('${vault.id}|${assignment.identityId}|${assignment.role}'))
+    ? existingRoleAssignmentNames[toLower('${vault.id}|${assignment.identityId}|${assignment.role}')]
+    : guid(vault.id, assignment.identityId, assignment.role)
   scope: vault
   properties: {
-    principalId: assignment.principal
+    principalId: assignment.identityId == readerIdentityResourceId ? readerIdentity.properties.principalId : writerIdentity.properties.principalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: assignment.role
   }
@@ -43,14 +58,14 @@ resource policies 'Microsoft.KeyVault/vaults/accessPolicies@2026-02-01' = if (!u
     accessPolicies: [
       {
         tenantId: tenantId
-        objectId: readerPrincipalId
+        objectId: readerIdentity.properties.principalId
         permissions: {
           secrets: ['get', 'list']
         }
       }
       {
         tenantId: tenantId
-        objectId: writerPrincipalId
+        objectId: writerIdentity.properties.principalId
         permissions: {
           secrets: ['get', 'list', 'set']
         }

@@ -1,6 +1,7 @@
 """Exact assertions over a compiled template, supplementing expression-limited scanners."""
 
 import json
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -40,7 +41,71 @@ def module_reference(side, name):
     return f"reference({module_id(side, name)}, '2025-04-01')"
 
 
+def identity_reference(parameter):
+    return (
+        "reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', "
+        f"subscription().subscriptionId, split(parameters('{parameter}'), '/')[4]), "
+        f"'Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('{parameter}'), '/'))), "
+        "'2024-11-30').principalId"
+    )
+
+
 class InfrastructureTests(unittest.TestCase):
+    def test_all_module_inputs_and_resource_enumeration_are_transitively_runtime_free(self):
+        checked = 0
+
+        def check_template(template):
+            nonlocal checked
+            variables = template.get("variables", {}).copy()
+            for variable in variables.pop("copy", []):
+                variables[variable["name"]] = variable
+
+            def check(value, seen=()):
+                if isinstance(value, dict):
+                    for item in value.values():
+                        check(item, seen)
+                elif isinstance(value, list):
+                    for item in value:
+                        check(item, seen)
+                elif isinstance(value, str):
+                    self.assertNotRegex(value, r"(?i)\b(references?|list\w*)\s*\(")
+                    for name in re.findall(r"variables\('([^']+)'\)", value):
+                        if name not in seen:
+                            check(variables[name], (*seen, name))
+
+            for resource in template.get("resources", []):
+                checked += 1
+                for field in ("name", "scope", "resourceGroup", "subscriptionId", "condition", "copy", "dependsOn"):
+                    check(resource.get(field))
+                if resource["type"] == "Microsoft.Resources/deployments":
+                    check(resource["properties"].get("parameters"))
+                    check_template(resource["properties"]["template"])
+
+        check_template(TEMPLATE)
+        self.assertGreater(checked, 100)
+
+    def test_existing_vault_snapshot_and_static_service_contract(self):
+        stamp = next(item for item in TEMPLATE["variables"]["copy"] if item["name"] == "stamps")["input"]
+        for field, metadata in (("vaultUri", "vaultUri"), ("vaultUsesRbac", "usesRbac"), ("vaultTenantId", "tenantId")):
+            self.assertIn(
+                f"parameters('resolvedExistingVaults')[toLower(variables('stampInputs')[copyIndex('stamps')].vaultId)].{metadata}",
+                stamp[field],
+            )
+        self.assertIn("environment().suffixes.keyvaultDns", stamp["vaultUri"])
+        self.assertIn("Microsoft.Insights/components", stamp["runtime"]["insightsId"])
+        self.assertNotIn("identityClientId", stamp["runtime"])
+        self.assertNotIn("insightsConnectionString", stamp["runtime"])
+        for field in ("resolvedExistingVaults", "resolvedVaultRoleAssignments"):
+            self.assertEqual(TEMPLATE["parameters"][field]["defaultValue"], {})
+        for side, index in (("primary", 0), ("secondary", 1)):
+            worker = deployment(f"{side}-worker")["properties"]["parameters"]
+            self.assertEqual(worker["foundation"]["value"], f"[variables('stamps')[{index}].runtime]")
+            for name, field in (("sourceVaultId", "vaultId"), ("sourceVaultUri", "vaultUri")):
+                self.assertEqual(worker[name]["value"], f"[variables('stamps')[{index}].{field}]")
+            endpoints = deployment(f"{side}-endpoints")
+            for stamp_side in ("primary", "secondary"):
+                self.assertIn(f"[{module_id(stamp_side, 'foundation')}]", endpoints["dependsOn"])
+
     def test_vaults_are_private_with_explicit_authorization_and_purge_protection(self):
         vaults = of_type("Microsoft.KeyVault/vaults")
         self.assertEqual(len(vaults), 2)
@@ -93,28 +158,31 @@ class InfrastructureTests(unittest.TestCase):
             main_outputs = TEMPLATE["outputs"][f"{side}Resources"]["value"]
             self.assertEqual(
                 main_outputs["vaultAuthorizationModel"],
-                f"[if({module_reference(side, 'foundation')}.outputs.vaultUsesRbac.value, 'rbac', 'accessPolicy')]",
+                f"[if(variables('stamps')[{0 if side == 'primary' else 1}].vaultUsesRbac, 'rbac', 'accessPolicy')]",
             )
             self.assertEqual(
                 main_outputs["identityPrincipalId"],
-                f"[{module_reference(side, 'foundation')}.outputs.principalId.value]",
+                f"[{module_reference(side, 'worker-identity')}.outputs.principalId.value]",
             )
 
     def test_vault_grants_use_effective_model_tenant_and_correct_worker_principals(self):
         for side, other in (("primary", "secondary"), ("secondary", "primary")):
             parameters = deployment(f"{side}-vault-access")["properties"]["parameters"]
-            for parameter, output in (
+            index = 0 if side == "primary" else 1
+            for parameter, field in (
                 ("useRbac", "vaultUsesRbac"), ("tenantId", "vaultTenantId"),
-                ("vaultName", "vaultName"), ("readerPrincipalId", "principalId"),
+                ("vaultName", "vaultName"), ("readerIdentityResourceId", "identityId"),
             ):
                 self.assertEqual(
                     parameters[parameter]["value"],
-                    f"[{module_reference(side, 'foundation')}.outputs.{output}.value]",
+                    f"[variables('stamps')[{index}].{field}]",
                 )
             self.assertEqual(
-                parameters["writerPrincipalId"]["value"],
-                f"[{module_reference(other, 'foundation')}.outputs.principalId.value]",
+                parameters["writerIdentityResourceId"]["value"],
+                f"[variables('stamps')[{1 - index}].identityId]",
             )
+            self.assertEqual(parameters["writerRoleId"]["value"], "[variables('replicaWriterRoleId')]")
+            self.assertEqual(parameters["existingRoleAssignmentNames"]["value"], "[parameters('resolvedVaultRoleAssignments')]")
 
     def test_access_policies_are_additive_and_exactly_secret_read_or_replica_write(self):
         policies = of_type("Microsoft.KeyVault/vaults/accessPolicies")
@@ -125,12 +193,12 @@ class InfrastructureTests(unittest.TestCase):
             self.assertEqual(policy["properties"]["accessPolicies"], [
                 {
                     "tenantId": "[parameters('tenantId')]",
-                    "objectId": "[parameters('readerPrincipalId')]",
+                    "objectId": f"[{identity_reference('readerIdentityResourceId')}]",
                     "permissions": {"secrets": ["get", "list"]},
                 },
                 {
                     "tenantId": "[parameters('tenantId')]",
-                    "objectId": "[parameters('writerPrincipalId')]",
+                    "objectId": f"[{identity_reference('writerIdentityResourceId')}]",
                     "permissions": {"secrets": ["get", "list", "set"]},
                 },
             ])
@@ -151,8 +219,8 @@ class InfrastructureTests(unittest.TestCase):
                 self.assertIn(f"[{module_id(worker_side, 'worker-identity')}]", foundation["dependsOn"])
             properties = foundation["properties"]
             self.assertEqual(
-                properties["parameters"]["replicaWriterPrincipalId"]["value"],
-                f"[{module_reference(other, 'worker-identity')}.outputs.principalId.value]",
+                properties["parameters"]["replicaWriterIdentityResourceId"]["value"],
+                f"[variables('stamps')[{1 if side == 'primary' else 0}].identityId]",
             )
             nested = properties["template"]
             reader = (
@@ -163,7 +231,7 @@ class InfrastructureTests(unittest.TestCase):
             )
             writer = (
                 "createObject('tenantId', subscription().tenantId, 'objectId', "
-                "parameters('replicaWriterPrincipalId'), 'permissions', "
+                f"{identity_reference('replicaWriterIdentityResourceId')}, 'permissions', "
                 "createObject('secrets', createArray('get', 'list', 'set')))"
             )
             vault = next(resource for resource in nested["resources"] if resource["type"] == "Microsoft.KeyVault/vaults")
@@ -177,8 +245,7 @@ class InfrastructureTests(unittest.TestCase):
         role = deployment("[format('{0}-{1}-replica-writer-role', parameters('workload'), variables('token'))]")
         self.assertEqual(
             role["properties"]["parameters"]["enabled"]["value"],
-            f"[or({module_reference('primary', 'foundation')}.outputs.vaultUsesRbac.value, "
-            f"{module_reference('secondary', 'foundation')}.outputs.vaultUsesRbac.value)]",
+            "[or(variables('stamps')[0].vaultUsesRbac, variables('stamps')[1].vaultUsesRbac)]",
         )
         definition = of_type("Microsoft.Authorization/roleDefinitions")[0]
         self.assertEqual(definition["condition"], "[parameters('enabled')]")
@@ -192,11 +259,24 @@ class InfrastructureTests(unittest.TestCase):
             self.assertEqual(assignments[0]["scope"], "[resourceId('Microsoft.KeyVault/vaults', parameters('vaultName'))]")
             self.assertEqual(access["variables"]["assignments"], [
                 {
-                    "principal": "[parameters('readerPrincipalId')]",
-                    "role": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]",
+                    "identityId": "[parameters('readerIdentityResourceId')]",
+                    "role": "[variables('readerRoleId')]",
                 },
-                {"principal": "[parameters('writerPrincipalId')]", "role": "[parameters('writerRoleId')]"},
+                {"identityId": "[parameters('writerIdentityResourceId')]", "role": "[parameters('writerRoleId')]"},
             ])
+            self.assertEqual(
+                access["variables"]["readerRoleId"],
+                "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')]",
+            )
+            self.assertIn("parameters('existingRoleAssignmentNames')", assignments[0]["name"])
+            self.assertIn(
+                "guid(resourceId('Microsoft.KeyVault/vaults', parameters('vaultName')), "
+                "variables('assignments')[copyIndex()].identityId, variables('assignments')[copyIndex()].role)",
+                assignments[0]["name"],
+            )
+            self.assertEqual(assignments[0]["properties"]["principalType"], "ServicePrincipal")
+            self.assertIn(identity_reference("readerIdentityResourceId"), assignments[0]["properties"]["principalId"])
+            self.assertIn(identity_reference("writerIdentityResourceId"), assignments[0]["properties"]["principalId"])
 
     def test_storage_uses_zrs_and_no_keys_or_public_data(self):
         accounts = of_type("Microsoft.Storage/storageAccounts")

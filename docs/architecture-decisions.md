@@ -18,6 +18,7 @@ Approved through interactive clarification on 2026-10-09.
 | Vault authorization (subsequent customer decision) | Access-policy default for managed vaults; per-vault RBAC opt-in; reused models detected/preserved | Accommodate policy-based customers and mixed pairs without automatic migration |
 | Source selection for reused vaults | Explicit name allowlist/prefix or whole-vault opt-in | Avoid accidental copying from shared vaults |
 | Destination collisions | Reject unmanaged names unless replacement is explicitly approved | Preserve existing unrelated contents |
+| What-if wiring (subsequent customer decision) | Static module inputs, automatic read-only discovery, and a fail-closed complete-preview gate | Users edit only parameters; runtime module outputs must not hide downstream deployments |
 
 ## Implementation refinements
 
@@ -47,6 +48,12 @@ Approved through interactive clarification on 2026-10-09.
   lists. Reused vaults instead receive an additive child policy update without
   replacing other principals' entries. Existing RBAC deployments must pin
   `'rbac'` explicitly before adopting the new defaults.
+- Nested modules receive deterministic ARM IDs/names and a runner-generated
+  snapshot of existing-vault model/tenant/URI. Runtime identity/telemetry reads
+  stay inside resource properties; explicit dependencies preserve actual
+  creation order. RBAC names use identity ARM IDs for new grants and inventory
+  preserves prior principal-seeded assignment names. A partial successful
+  what-if is rejected before apply; no user-side Bicep rewiring is required.
 - Three reserved secret tags store non-value lineage. Sources may use at most
   12 other tags. Copying a secret with more tags fails visibly.
 - Unreadable latest versions with identical creation timestamps are not guessed.

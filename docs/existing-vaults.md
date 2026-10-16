@@ -42,13 +42,24 @@ from `scripts\Deploy.ps1`, before ARM validation/what-if/deployment. It requires
 
 The account running preflight must read both vault resources and subscription
 system topics; failure to inventory is a blocking error, not permission to
-create a duplicate. It does not retrieve secret values. Endpoint approvals,
+create a duplicate. With RBAC on either selected vault, preparation also requires
+subscription-wide user-assigned-identity and role-assignment read permissions.
+The runner filters that inventory to matching solution-worker identities and
+vault scopes, retaining already deployed role-assignment names without deleting
+or recreating grants. It disables Graph principal-name and role-name lookups;
+directory-read access is not required for this inventory.
+It does not retrieve secret values. Endpoint approvals,
 tenant policies, existing network/DNS effects, and data-plane permissions still
 require the deployment operator's review.
 
-Use the supplied deployment script rather than bypassing these checks with a raw
-ARM command. A direct deployment can bypass Python validation; the worker still
-fails closed on an empty secret selection, but that does not replace preflight.
+The runner captures the detected model, tenant ID, and service URI as temporary,
+non-secret ARM parameters before what-if. These known inputs let every nested
+module expand without requiring runtime outputs from a prior deployment.
+It validates the returned vault ID/tenant/URI, refreshes the snapshot on each run,
+and never changes the user's parameter file. Do not manually populate internal
+discovery fields or deploy existing-vault parameters directly with a raw ARM
+command; missing metadata is an error, not an access-policy fallback.
+The worker's empty-selection safeguard does not replace preflight.
 
 ## Authorization and permissions
 
@@ -80,8 +91,9 @@ RBAC integration adds only vault-scoped role assignments.
 The deployer needs policy-write permission for policy-based vaults and
 role-assignment/custom-role-definition write permissions for RBAC vaults.
 Storage, Service Bus, Event Grid, and monitoring still require RBAC. Preflight
-reads configuration and topics only; it cannot establish worker data access or
-permission propagation. Verify actual access before activation.
+reads configuration, topics, and, when needed, existing IAM metadata only; it
+cannot establish worker data access or permission propagation. Verify actual
+access before activation.
 
 Microsoft supports both models but recommends RBAC for separation of duties:
 vault-write control lets principals grant themselves data permissions under
@@ -141,6 +153,9 @@ Expected what-if: new integration resources/assignments, **no existing-vault
 configuration change or delete**, and no replacement of a reused system topic.
 Apply only with separate authorization, publish both workers, then activate
 the authoritative worker/route and verify reconciliation.
+The runner rejects incomplete coverage even if Azure CLI returns exit 0. A
+short-circuited foundation is not a successful preview and cannot be overridden
+with `-Apply`; see [what-if troubleshooting](troubleshooting.md#incomplete-what-if-coverage).
 
 ## Existing Event Grid topics
 

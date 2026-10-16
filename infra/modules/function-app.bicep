@@ -26,6 +26,16 @@ param enabled bool
 @description('Resource tags.')
 param tags object
 
+resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
+  name: last(split(foundation.identityId, '/'))
+  scope: resourceGroup(split(foundation.identityId, '/')[4])
+}
+
+resource insights 'Microsoft.Insights/components@2020-02-02' existing = {
+  name: last(split(foundation.insightsId, '/'))
+  scope: resourceGroup(split(foundation.insightsId, '/')[4])
+}
+
 resource plan 'Microsoft.Web/serverfarms@2025-03-01' = {
   name: 'plan-${prefix}'
   location: location
@@ -64,13 +74,13 @@ resource app 'Microsoft.Web/sites@2025-03-01' = {
       appSettings: [
         { name: 'AzureWebJobsStorage__accountName', value: foundation.storageName }
         { name: 'AzureWebJobsStorage__credential', value: 'managedidentity' }
-        { name: 'AzureWebJobsStorage__clientId', value: foundation.identityClientId }
+        { name: 'AzureWebJobsStorage__clientId', value: workerIdentity.properties.clientId }
         { name: 'ServiceBusConnection__fullyQualifiedNamespace', value: foundation.busNamespace }
         { name: 'ServiceBusConnection__credential', value: 'managedidentity' }
-        { name: 'ServiceBusConnection__clientId', value: foundation.identityClientId }
-        { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: foundation.insightsConnectionString }
-        { name: 'APPLICATIONINSIGHTS_AUTHENTICATION_STRING', value: 'ClientId=${foundation.identityClientId};Authorization=AAD' }
-        { name: 'WORKER_CLIENT_ID', value: foundation.identityClientId }
+        { name: 'ServiceBusConnection__clientId', value: workerIdentity.properties.clientId }
+        { name: 'APPLICATIONINSIGHTS_CONNECTION_STRING', value: insights.properties.ConnectionString }
+        { name: 'APPLICATIONINSIGHTS_AUTHENTICATION_STRING', value: 'ClientId=${workerIdentity.properties.clientId};Authorization=AAD' }
+        { name: 'WORKER_CLIENT_ID', value: workerIdentity.properties.clientId }
         { name: 'SOURCE_VAULT_ID', value: sourceVaultId }
         { name: 'SOURCE_VAULT_URI', value: sourceVaultUri }
         { name: 'DESTINATION_VAULT_URI', value: destinationVaultUri }
