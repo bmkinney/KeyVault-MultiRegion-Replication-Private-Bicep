@@ -10,6 +10,10 @@ param tenantId string
 param readerIdentityResourceId string
 @description('Opposite-region replica-writer identity ARM ID.')
 param writerIdentityResourceId string
+@description('Read-only-discovered existing reader principal ID; empty resolves a newly created identity inside resource properties.')
+param readerPrincipalId string = ''
+@description('Read-only-discovered existing writer principal ID.')
+param writerPrincipalId string = ''
 @description('Custom replica-writer role definition ID, excluding destructive secret operations.')
 param writerRoleId string
 @description('Previously deployed assignment names discovered by the deployment script.')
@@ -30,6 +34,8 @@ resource writerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-1
 }
 
 var readerRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')
+var selectedReaderPrincipalId = empty(readerPrincipalId) ? readerIdentity.properties.principalId : readerPrincipalId
+var selectedWriterPrincipalId = empty(writerPrincipalId) ? writerIdentity.properties.principalId : writerPrincipalId
 var assignments = [
   {
     identityId: readerIdentityResourceId
@@ -47,7 +53,7 @@ resource access 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for assi
     : guid(vault.id, assignment.identityId, assignment.role)
   scope: vault
   properties: {
-    principalId: assignment.identityId == readerIdentityResourceId ? readerIdentity.properties.principalId : writerIdentity.properties.principalId
+    principalId: assignment.identityId == readerIdentityResourceId ? selectedReaderPrincipalId : selectedWriterPrincipalId
     principalType: 'ServicePrincipal'
     roleDefinitionId: assignment.role
   }
@@ -60,14 +66,14 @@ resource policies 'Microsoft.KeyVault/vaults/accessPolicies@2026-02-01' = if (is
     accessPolicies: [
       {
         tenantId: tenantId
-        objectId: readerIdentity.properties.principalId
+        objectId: selectedReaderPrincipalId
         permissions: {
           secrets: ['get', 'list']
         }
       }
       {
         tenantId: tenantId
-        objectId: writerIdentity.properties.principalId
+        objectId: selectedWriterPrincipalId
         permissions: {
           secrets: ['get', 'list', 'set']
         }

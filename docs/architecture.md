@@ -139,7 +139,7 @@ Worker identity permissions:
 - Monitoring Metrics Publisher on local Application Insights.
 
 The reverse worker has its corresponding grants in advance but remains fenced.
-Both identities are created before managed vaults, allowing complete worker
+Both identities are available before managed vaults, allowing complete worker
 policy lists on every managed-vault PUT. The template owns these managed lists;
 unrelated external grants require existing-vault reference mode to be preserved.
 Reused policy-based vaults receive one additive policy request containing both
@@ -147,11 +147,21 @@ worker object/principal IDs, without a parent-vault PUT or whole-list replacemen
 Role assignments and the custom role are conditional on effective RBAC use.
 The worker SDK/authentication is unchanged; non-vault services still use RBAC.
 
+Each worker may use an independently selected precreated user-assigned identity;
+its resource group/name is not constrained to the regional stamp. In
+[external-permissions mode](deployment-contributor.md), administrators precreate
+both workers, vaults, and system topics and own every grant. Contributor operators
+deploy the remaining infrastructure without role definitions/assignments or
+vault policy writes. Identity attachment and ordinary deployment permissions
+still apply. Event Grid continues using separate system-topic system identities.
+
 Deployment modules exchange deterministic ARM IDs instead of runtime module
 outputs. The runner discovers existing-vault model/tenant/URI before preview and
 preserves prior vault role-assignment names through read-only IAM inventory when
-RBAC is in use. Identity principal/client IDs and the Insights connection string
-are resolved inside resource properties; explicit dependencies retain actual
+RBAC is in use and permissions are template-managed. Selected existing-worker
+principal/client IDs are discovered before preview; new-worker identity values
+and the Insights connection string are resolved inside resource properties.
+Explicit dependencies retain actual
 deployment order. This avoids the known cross-module what-if short-circuiting
 pattern without requiring users to edit templates or deploy identities first.
 The runner rejects incomplete preview coverage rather than treating CLI exit 0

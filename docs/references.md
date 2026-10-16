@@ -49,6 +49,9 @@ certify this custom application's behavior. Local and live tests are separate.
 | Structured what-if status, changes, diagnostics, and potential changes | [Subscription what-if response](https://learn.microsoft.com/en-us/rest/api/resources/deployments/what-if-at-subscription-scope?view=rest-resources-2025-04-01) |
 | Preserve execution ordering after replacing implicit output dependencies | [Explicit dependencies](https://learn.microsoft.com/en-us/azure/azure-resource-manager/bicep/resource-dependencies#explicit-dependency) |
 | Read existing vault grants without Graph principal/name enrichment | [Role assignment list flags](https://learn.microsoft.com/en-us/cli/azure/role/assignment?view=azure-cli-latest#az-role-assignment-list) |
+| Contributor manages resources but excludes IAM writes | [Contributor](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/privileged#contributor) |
+| Read/attach an existing user-assigned identity without creating it | [Managed Identity Operator actions](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/identity#managed-identity-operator) |
+| Existing parent-scope grants apply to subsequently created child resources | [RBAC scope/inheritance](https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview) |
 | Resource name constraints | [Name rules](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules) |
 
 ## Well-Architected review

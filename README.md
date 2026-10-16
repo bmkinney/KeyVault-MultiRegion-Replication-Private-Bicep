@@ -25,6 +25,8 @@ The same notice is available in [DISCLAIMER.md](DISCLAIMER.md).
   private code publication, activation, and acceptance checks.
 - [Azure Portal deployment](docs/deployment-portal.md): manually reproduce the
   same infrastructure and identity configuration without Bicep.
+- [Contributor-only deployment](docs/deployment-contributor.md): reuse precreated
+  worker identities and administrator-provisioned permissions, without IAM writes.
 - [Architecture and limitations](docs/architecture.md).
 - [Use existing Key Vaults](docs/existing-vaults.md): independent new/existing selection,
   source filters, preserved vault settings, and protected destination collisions.
@@ -63,9 +65,15 @@ replication. Activation is an explicit deployment/configuration step.
 
 Copy the appropriate example to `infra\parameters\deployment.local.bicepparam`
 and edit only that file. Use `scripts\Deploy.ps1 -ParametersFile` with Azure CLI
-2.75.0 or newer. Worker identities are created automatically; do not supply
-principal/client IDs or edit Bicep wiring. The runner discovers existing-vault
-metadata and prior vault role-assignment names into temporary parameters,
+2.75.0 or newer. Worker identities are created by default; supply
+`primaryWorkerIdentityResourceId` and/or `secondaryWorkerIdentityResourceId`
+to reuse existing identities. Do not supply principal/client IDs or edit Bicep
+wiring. For Contributor-only operators, start with
+`infra\parameters\contributor.example.bicepparam` and set `managePermissions = false`.
+Administrators must first prepare both identities, vaults, system topics, and
+their runtime grants; this mode does not create or change IAM permissions.
+The runner discovers existing-vault/identity metadata and, in managed-permissions
+mode, prior vault role-assignment names into temporary parameters,
 then uses the same parameters for validation, preview, and an explicitly
 authorized `-Apply`. Incomplete what-if coverage blocks deployment, including
 `NestedDeploymentShortCircuited` diagnostics; there is no bypass switch.

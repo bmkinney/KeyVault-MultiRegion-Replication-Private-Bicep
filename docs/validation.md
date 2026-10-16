@@ -225,3 +225,33 @@ conditions. Unsuppressed Checkov remains **59 passed / 14 failed / 0 skipped /
 0 parsing errors, exit 1**, with the same seven reviewed rule IDs. The runner,
 Python discovery, and Portal Function module are unchanged. A fresh live preview
 after this correction has not been run, and no Azure resources were changed.
+
+## Existing workers and Contributor-only operators (2026-10-16)
+
+Added independent existing-worker ARM IDs and read-only principal/client/tenant
+discovery. Default managed-permissions deployment retains identity creation and
+all original grants. `managePermissions = false` requires explicit existing
+workers/vaults/system topics and leaves all IAM to administrators. No role or
+vault policy writes, worker creations, or topic-identity enablement are active
+in this mode. The complete-preview gate remains unchanged.
+
+| Check | Actual result |
+| --- | --- |
+| Main Bicep and all three parameter examples, including Contributor mode | Compilation exit 0, no diagnostics |
+| Full unit suite | 88 passed, including actual PowerShell runner execution with local command doubles |
+| Compiled-infrastructure suite | 24 passed; selected identities/principals across consumers, recursively guarded IAM/principal creation, transitive static module inputs, and all previous architecture/authorization invariants |
+| Identity preflight cases | All four external vault-model pairs; missing prerequisites before any query; malformed/cross-subscription IDs; missing/invalid/cross-tenant metadata; duplicate identities/principals; identity read failure; fresh snapshots; mixed new/existing workers; arbitrary identity names/groups and retained existing RBAC grant names |
+| Unsuppressed Checkov 3.3.22 | 59 passed, 14 failed, 0 skipped, 0 parsing errors; exit 1 |
+
+Checkov retains the same seven documented rule IDs and is **not clean**; there
+are no new suppressions or severity-clearance claims. The Function module and
+tracked Portal ARM fallback are unchanged because the selected identity ARM-ID
+contract already supports identities in another group.
+
+Completion self-check: local compilation/regressions **PASS**; private/identity
+defaults and no-active-IAM-path assertions **PASS**; Checkov **REVIEWED, NOT
+CLEAN**; live Contributor-scope deployment, complete what-if, inherited/custom
+grant propagation, private endpoint approvals, worker startup/activation, and
+Portal walkthrough **PENDING**. No Azure resource was queried or changed for
+this implementation. Metadata preflight does not prove effective data-plane
+access; administrator preparation remains a required separate action.
