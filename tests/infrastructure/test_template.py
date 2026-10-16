@@ -188,7 +188,7 @@ class InfrastructureTests(unittest.TestCase):
         policies = of_type("Microsoft.KeyVault/vaults/accessPolicies")
         self.assertEqual(len(policies), 2)
         for policy in policies:
-            self.assertEqual(policy["condition"], "[not(parameters('useRbac'))]")
+            self.assertEqual(policy["condition"], "[and(parameters('isExistingVault'), not(parameters('useRbac')))]")
             self.assertEqual(policy["name"], "[format('{0}/{1}', parameters('vaultName'), 'add')]")
             self.assertEqual(policy["properties"]["accessPolicies"], [
                 {
@@ -202,6 +202,23 @@ class InfrastructureTests(unittest.TestCase):
                     "permissions": {"secrets": ["get", "list", "set"]},
                 },
             ])
+
+    def test_only_explicitly_reused_vaults_receive_additive_policy_updates(self):
+        self.assertNotIn("isExistingVault", TEMPLATE["parameters"])
+        for side in ("primary", "secondary"):
+            access = deployment(f"{side}-vault-access")["properties"]
+            self.assertEqual(
+                access["parameters"]["isExistingVault"]["value"],
+                f"[not(empty(parameters('{side}VaultResourceId')))]",
+            )
+            self.assertEqual(access["template"]["parameters"]["isExistingVault"]["type"], "bool")
+            self.assertNotIn("defaultValue", access["template"]["parameters"]["isExistingVault"])
+            policy = next(resource for resource in access["template"]["resources"]
+                          if resource["type"] == "Microsoft.KeyVault/vaults/accessPolicies")
+            self.assertEqual(policy["condition"], "[and(parameters('isExistingVault'), not(parameters('useRbac')))]")
+            role = next(resource for resource in access["template"]["resources"]
+                        if resource["type"] == "Microsoft.Authorization/roleAssignments")
+            self.assertEqual(role["condition"], "[parameters('useRbac')]")
 
     def test_managed_vaults_keep_complete_worker_policies_on_redeployment(self):
         identities = of_type("Microsoft.ManagedIdentity/userAssignedIdentities")

@@ -52,3 +52,15 @@ There is no bypass switch. Unknown property values can still produce prediction
 noise, and local compilation/mocked tests do not prove a diagnostic-free live
 what-if in every subscription. Resolve the reported provider/analysis limitation
 rather than treating a partial resource count as approval.
+
+If only `<vault>/accessPolicies/add` is `Unsupported`, first distinguish managed
+vaults from vaults selected by ID. Managed policy-based vaults already contain
+both worker grants in the foundation's vault PUT; only reused vaults should
+receive the additive child operation. Earlier revisions unnecessarily submitted
+both forms for managed vaults. Pull the corrected templates rather than skipping
+the coverage check or supplying generated principal IDs manually.
+
+An existing policy-based vault still requires the additive operation to preserve
+unrelated policies. Azure can reject prediction while new worker principal IDs
+remain unknown. That first-time integration case remains blocked unless its
+preview can be resolved; do not infer its success from a new-vault test.
