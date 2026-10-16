@@ -59,6 +59,18 @@ is placed into an event, coordination blob, or application log.
 Both workers and event routes start inactive. Publishing code does not enable
 replication. Activation is an explicit deployment/configuration step.
 
+## Configure parameters, not templates
+
+Copy the appropriate example to `infra\parameters\deployment.local.bicepparam`
+and edit only that file. Use `scripts\Deploy.ps1 -ParametersFile` with Azure CLI
+2.75.0 or newer. Worker identities are created automatically; do not supply
+principal/client IDs or edit Bicep wiring. The runner discovers existing-vault
+metadata and prior vault role-assignment names into temporary parameters,
+then uses the same parameters for validation, preview, and an explicitly
+authorized `-Apply`. Incomplete what-if coverage blocks deployment, including
+`NestedDeploymentShortCircuited` diagnostics; there is no bypass switch.
+See the [deployment procedure](docs/deployment-bicep.md#3-validate-preview-and-deploy-infrastructure).
+
 ## Demo objectives, not guarantees
 
 The example targets up to 100 secrets and 10 updates/minute, healthy event-driven

@@ -8,7 +8,7 @@ from io import StringIO
 from itertools import product
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
-from check_vault_integration import preflight, azure_json, authorization_model
+from check_vault_integration import preflight, azure_json, authorization_model, prepare_parameters, existing_role_assignment_names
 
 SUBSCRIPTION = "00000000-0000-0000-0000-000000000000"
 VAULT_ID = f"/subscriptions/{SUBSCRIPTION}/resourceGroups/existing/providers/Microsoft.KeyVault/vaults/source"
@@ -28,6 +28,8 @@ class PreflightTests(unittest.TestCase):
         self.vault = {
             "id": VAULT_ID, "location": "eastus",
             "properties": {
+                "tenantId": SUBSCRIPTION,
+                "vaultUri": "https://source.vault.azure.net/",
                 "enableRbacAuthorization": True,
                 "enablePurgeProtection": True,
                 "enableSoftDelete": True,
@@ -94,6 +96,7 @@ class PreflightTests(unittest.TestCase):
     def test_mixed_existing_vault_models(self):
         secondary = copy.deepcopy(self.vault)
         secondary.update(id=VAULT_ID + "-replica", location="centralus")
+        secondary["properties"]["vaultUri"] = "https://source-replica.vault.azure.net/"
         for primary_model, secondary_model in [(True, False), (False, True)]:
             with self.subTest(primary=primary_model, secondary=secondary_model):
                 self.vault["properties"]["enableRbacAuthorization"] = primary_model
@@ -118,6 +121,7 @@ class PreflightTests(unittest.TestCase):
                         vault["id"] = VAULT_ID + f"-{side}"
                         vault["location"] = "eastus" if side == "primary" else "centralus"
                         vault["properties"]["enableRbacAuthorization"] = rbac
+                        vault["properties"]["vaultUri"] = f"https://source-{side}.vault.azure.net/"
                         vaults[vault["id"]] = vault
                         values[f"{side}VaultResourceId"] = vault["id"]
                 original = copy.deepcopy(vaults)
@@ -127,6 +131,8 @@ class PreflightTests(unittest.TestCase):
                         return vaults[args[3]]
                     if args[:3] == ("eventgrid", "system-topic", "list"):
                         return []
+                    if args[:2] == ("identity", "list"):
+                        return []
                     raise AssertionError(f"Unexpected non-read-only query: {args}")
 
                 query = Mock(side_effect=read_only_query)
@@ -134,6 +140,113 @@ class PreflightTests(unittest.TestCase):
                     preflight(params(**values), SUBSCRIPTION, query)
                 self.assertEqual(query.call_count, len(vaults) + bool(vaults))
                 self.assertEqual(vaults, original)
+                query.reset_mock()
+                document = {"parameters": params(**values)}
+                original_document = copy.deepcopy(document)
+                with redirect_stdout(StringIO()):
+                    prepared = prepare_parameters(document, SUBSCRIPTION, query)
+                self.assertEqual(document, original_document)
+                snapshot = prepared["parameters"]["resolvedExistingVaults"]["value"]
+                self.assertEqual(set(snapshot), {vault_id.lower() for vault_id in vaults})
+                for vault in vaults.values():
+                    self.assertEqual(snapshot[vault["id"].lower()], {
+                        "usesRbac": vault["properties"]["enableRbacAuthorization"],
+                        "tenantId": SUBSCRIPTION, "vaultUri": vault["properties"]["vaultUri"],
+                    })
+                self.assertEqual(query.call_count, len(vaults) + bool(vaults) + bool(primary_rbac or secondary_rbac))
+
+    def test_prepared_snapshot_is_fresh_and_does_not_mutate_user_parameters(self):
+        for actual in (True, False, None):
+            with self.subTest(actual=actual):
+                self.vault["properties"]["enableRbacAuthorization"] = actual
+                document = {"parameters": {
+                    **self.config,
+                    "resolvedExistingVaults": {"value": {"stale": {}}},
+                    "resolvedVaultRoleAssignments": {"value": {"stale": "assignment"}},
+                }}
+                original = copy.deepcopy(document)
+
+                def query(*args):
+                    if args[:2] == ("identity", "list"):
+                        return []
+                    return self.query(*args)
+
+                prepared = prepare_parameters(document, SUBSCRIPTION, query)
+                self.assertEqual(document, original)
+                self.assertEqual(prepared["parameters"]["resolvedExistingVaults"]["value"], {
+                    VAULT_ID.lower(): {
+                        "usesRbac": actual is True, "tenantId": SUBSCRIPTION,
+                        "vaultUri": "https://source.vault.azure.net/",
+                    },
+                })
+                self.assertEqual(prepared["parameters"]["resolvedVaultRoleAssignments"]["value"], {})
+
+    def test_default_preparation_needs_no_azure_inventory(self):
+        query = Mock(side_effect=AssertionError("unexpected Azure query"))
+        prepared = prepare_parameters({"parameters": {}}, SUBSCRIPTION, query)
+        self.assertEqual(prepared["parameters"]["resolvedExistingVaults"]["value"], {})
+        query.assert_not_called()
+
+    def test_invalid_metadata_is_rejected(self):
+        for field, invalid in [
+            ("tenantId", None), ("tenantId", "invalid"),
+            ("vaultUri", None), ("vaultUri", "http://source.vault.azure.net/"),
+            ("vaultUri", "https://different.vault.azure.net/"),
+            ("vaultUri", "https://source.vault.azure.net/secrets"),
+            ("vaultUri", "https://source.vault.azure.net/?query=value"),
+        ]:
+            with self.subTest(field=field, invalid=invalid):
+                original = copy.deepcopy(self.vault)
+                self.vault["properties"][field] = invalid
+                with self.assertRaises(ValueError):
+                    prepare_parameters({"parameters": self.config}, SUBSCRIPTION, self.query)
+                self.vault = original
+        self.vault["id"] = VAULT_ID + "-unexpected"
+        with self.assertRaisesRegex(ValueError, "different vault"):
+            preflight(self.config, SUBSCRIPTION, self.query)
+
+    def test_rbac_inventory_preserves_old_and_new_assignment_names(self):
+        identity_id = (
+            f"/subscriptions/{SUBSCRIPTION}/resourceGroups/rg-mrkv-p-abcdefgh"
+            "/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-mrkv-p-abcdefgh-worker"
+        )
+        identity = {"id": identity_id, "name": "id-mrkv-p-abcdefgh-worker", "principalId": SUBSCRIPTION}
+        role = f"/subscriptions/{SUBSCRIPTION}/providers/Microsoft.Authorization/roleDefinitions/{SUBSCRIPTION}"
+        for name in ("11111111-1111-1111-1111-111111111111", "22222222-2222-2222-2222-222222222222"):
+            with self.subTest(name=name):
+                assignment = {"name": name, "scope": VAULT_ID, "roleDefinitionId": role, "principalId": SUBSCRIPTION}
+                query = Mock(side_effect=[[identity], [assignment]])
+                self.assertEqual(existing_role_assignment_names("mrkv", SUBSCRIPTION, query), {
+                    f"{VAULT_ID}|{identity_id}|{role}".lower(): name,
+                })
+                self.assertEqual(query.call_args.args, (
+                    "role", "assignment", "list", "--subscription", SUBSCRIPTION, "--all",
+                    "--fill-principal-name", "false", "--fill-role-definition-name", "false",
+                ))
+
+    def test_rbac_inventory_ignores_unrelated_identities_and_grants(self):
+        query = Mock(return_value=[{
+            "name": "id-mrkv-p-abcdefgh-worker",
+            "id": f"/subscriptions/{SUBSCRIPTION}/resourceGroups/unrelated/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-mrkv-p-abcdefgh-worker",
+            "principalId": SUBSCRIPTION,
+        }])
+        self.assertEqual(existing_role_assignment_names("mrkv", SUBSCRIPTION, query), {})
+        self.assertEqual(query.call_count, 1)
+
+    def test_rbac_inventory_failures_stop_preparation(self):
+        query = Mock(side_effect=RuntimeError("read denied"))
+        with self.assertRaisesRegex(RuntimeError, "read denied"):
+            prepare_parameters({"parameters": params(primaryVaultAuthorizationModel="rbac")}, SUBSCRIPTION, query)
+
+    def test_rbac_inventory_rejects_ambiguous_assignments(self):
+        identity = {
+            "name": "id-mrkv-p-abcdefgh-worker", "principalId": SUBSCRIPTION,
+            "id": f"/subscriptions/{SUBSCRIPTION}/resourceGroups/rg-mrkv-p-abcdefgh/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-mrkv-p-abcdefgh-worker",
+        }
+        assignment = {"name": SUBSCRIPTION, "scope": VAULT_ID, "roleDefinitionId": SUBSCRIPTION, "principalId": SUBSCRIPTION}
+        other = {**assignment, "name": "11111111-1111-1111-1111-111111111111"}
+        with self.assertRaisesRegex(ValueError, "Multiple existing"):
+            existing_role_assignment_names("mrkv", SUBSCRIPTION, Mock(side_effect=[[identity], [assignment, other]]))
 
     def test_invalid_detected_authorization_model_rejected(self):
         for invalid in ("false", "true", 0, 1, [], {}):

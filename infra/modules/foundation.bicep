@@ -15,8 +15,10 @@ param existingVaultResourceId string = ''
 @description('Authorization for a solution-managed vault; ignored for a reused vault.')
 @allowed(['accessPolicy', 'rbac'])
 param vaultAuthorizationModel string = 'accessPolicy'
-@description('Opposite-region worker identity, created before either vault.')
-param replicaWriterPrincipalId string
+@description('Opposite-region worker identity ARM ID, known before deployment.')
+param replicaWriterIdentityResourceId string
+@description('Shared regional private DNS zone names, supplied by the entrypoint.')
+param zoneNames object
 @description('Existing system topic ARM ID; empty creates a dedicated topic if none exists.')
 param existingSystemTopicResourceId string = ''
 
@@ -54,18 +56,6 @@ resource vnet 'Microsoft.Network/virtualNetworks@2025-05-01' = {
   }
 }
 
-var zoneNames = {
-  vault: 'privatelink.vaultcore.azure.net'
-  bus: 'privatelink.servicebus.windows.net'
-  blob: 'privatelink.blob.${environment().suffixes.storage}'
-  queue: 'privatelink.queue.${environment().suffixes.storage}'
-  table: 'privatelink.table.${environment().suffixes.storage}'
-  app: 'privatelink.azurewebsites.net'
-  monitor: 'privatelink.monitor.azure.com'
-  oms: 'privatelink.oms.opinsights.azure.com'
-  ods: 'privatelink.ods.opinsights.azure.com'
-  agent: 'privatelink.agentsvc.azure-automation.net'
-}
 var zoneList = items(zoneNames)
 
 resource zones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for zone in zoneList: {
@@ -90,6 +80,11 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' 
   name: 'id-${prefix}-worker'
 }
 
+resource replicaWriterIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
+  name: last(split(replicaWriterIdentityResourceId, '/'))
+  scope: resourceGroup(split(replicaWriterIdentityResourceId, '/')[4])
+}
+
 var workerPolicies = [
   {
     tenantId: subscription().tenantId
@@ -100,7 +95,7 @@ var workerPolicies = [
   }
   {
     tenantId: subscription().tenantId
-    objectId: replicaWriterPrincipalId
+    objectId: replicaWriterIdentity.properties.principalId
     permissions: {
       secrets: ['get', 'list', 'set']
     }

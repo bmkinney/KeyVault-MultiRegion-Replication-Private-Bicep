@@ -25,6 +25,12 @@ param primaryVaultAuthorizationModel string = 'accessPolicy'
 @allowed(['accessPolicy', 'rbac'])
 param secondaryVaultAuthorizationModel string = 'accessPolicy'
 
+@description('Internal read-only discovery snapshot, populated by Deploy.ps1. Do not set in user parameter files.')
+param resolvedExistingVaults object = {}
+
+@description('Internal catalogue preserving previously deployed vault role-assignment names, populated by Deploy.ps1.')
+param resolvedVaultRoleAssignments object = {}
+
 @description('Existing system topic for the primary vault; preflight requires reuse when one exists.')
 param primarySystemTopicResourceId string = ''
 
@@ -93,6 +99,68 @@ resource secondaryGroup 'Microsoft.Resources/resourceGroups@2025-04-01' = {
   tags: tags
 }
 
+var zoneNames = {
+  vault: 'privatelink.vaultcore.azure.net'
+  bus: 'privatelink.servicebus.windows.net'
+  blob: 'privatelink.blob.${environment().suffixes.storage}'
+  queue: 'privatelink.queue.${environment().suffixes.storage}'
+  table: 'privatelink.table.${environment().suffixes.storage}'
+  app: 'privatelink.azurewebsites.net'
+  monitor: 'privatelink.monitor.azure.com'
+  oms: 'privatelink.oms.opinsights.azure.com'
+  ods: 'privatelink.ods.opinsights.azure.com'
+  agent: 'privatelink.agentsvc.azure-automation.net'
+}
+
+var stampInputs = [
+  {
+    prefix: primaryPrefix
+    groupName: primaryGroup.name
+    storageToken: '${workload}p${token}'
+    vaultId: primaryVaultResourceId
+    authorizationModel: primaryVaultAuthorizationModel
+    topicId: primarySystemTopicResourceId
+  }
+  {
+    prefix: secondaryPrefix
+    groupName: secondaryGroup.name
+    storageToken: '${workload}s${token}'
+    vaultId: secondaryVaultResourceId
+    authorizationModel: secondaryVaultAuthorizationModel
+    topicId: secondarySystemTopicResourceId
+  }
+]
+
+var stamps = [for stamp in stampInputs: {
+  identityId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.ManagedIdentity/userAssignedIdentities', 'id-${stamp.prefix}-worker')
+  vaultId: empty(stamp.vaultId) ? resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.KeyVault/vaults', 'kv-${stamp.prefix}') : stamp.vaultId
+  vaultName: empty(stamp.vaultId) ? 'kv-${stamp.prefix}' : last(split(stamp.vaultId, '/'))
+  vaultUri: empty(stamp.vaultId) ? 'https://kv-${stamp.prefix}${environment().suffixes.keyvaultDns}/' : resolvedExistingVaults[toLower(stamp.vaultId)].vaultUri
+  vaultUsesRbac: empty(stamp.vaultId) ? stamp.authorizationModel == 'rbac' : resolvedExistingVaults[toLower(stamp.vaultId)].usesRbac
+  vaultTenantId: empty(stamp.vaultId) ? subscription().tenantId : resolvedExistingVaults[toLower(stamp.vaultId)].tenantId
+  topicName: empty(stamp.topicId) ? 'evgt-${stamp.prefix}' : last(split(stamp.topicId, '/'))
+  queueId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.ServiceBus/namespaces/queues', 'sb-${stamp.prefix}', 'kv-events')
+  storageId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Storage/storageAccounts', 'st${stamp.storageToken}run')
+  deadletterStorageId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Storage/storageAccounts', 'st${stamp.storageToken}dl')
+  monitorScopeId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Insights/privateLinkScopes', 'ampls-${stamp.prefix}')
+  endpointSubnetId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/virtualNetworks/subnets', 'vnet-${stamp.prefix}', 'endpoints')
+  zoneIds: toObject(items(zoneNames), zone => zone.key, zone => resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/privateDnsZones', zone.value))
+  runtime: {
+    identityId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.ManagedIdentity/userAssignedIdentities', 'id-${stamp.prefix}-worker')
+    storageName: 'st${stamp.storageToken}run'
+    storageBlobUri: 'https://st${stamp.storageToken}run.blob.${environment().suffixes.storage}/'
+    busNamespace: 'sb-${stamp.prefix}.servicebus.windows.net'
+    integrationSubnetId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/virtualNetworks/subnets', 'vnet-${stamp.prefix}', 'integration')
+    endpointSubnetId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/virtualNetworks/subnets', 'vnet-${stamp.prefix}', 'endpoints')
+    appDnsZoneId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/privateDnsZones', zoneNames.app)
+    workspaceId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.OperationalInsights/workspaces', 'log-${stamp.prefix}')
+    insightsId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Insights/components', 'appi-${stamp.prefix}')
+    actionGroupId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Insights/actionGroups', 'ag-${stamp.prefix}')
+  }
+}]
+
+var replicaWriterRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', guid(subscription().id, workload, 'secret-replica-writer'))
+
 module primaryIdentity './modules/worker-identity.bicep' = {
   name: 'primary-worker-identity'
   scope: primaryGroup
@@ -125,10 +193,11 @@ module primary './modules/foundation.bicep' = {
     tags: tags
     existingVaultResourceId: primaryVaultResourceId
     vaultAuthorizationModel: primaryVaultAuthorizationModel
-    replicaWriterPrincipalId: secondaryIdentity.outputs.principalId
+    replicaWriterIdentityResourceId: stamps[1].identityId
     existingSystemTopicResourceId: primarySystemTopicResourceId
+    zoneNames: zoneNames
   }
-  dependsOn: [primaryIdentity]
+  dependsOn: [primaryIdentity, secondaryIdentity]
 }
 
 module secondary './modules/foundation.bicep' = {
@@ -143,10 +212,11 @@ module secondary './modules/foundation.bicep' = {
     tags: tags
     existingVaultResourceId: secondaryVaultResourceId
     vaultAuthorizationModel: secondaryVaultAuthorizationModel
-    replicaWriterPrincipalId: primaryIdentity.outputs.principalId
+    replicaWriterIdentityResourceId: stamps[0].identityId
     existingSystemTopicResourceId: secondarySystemTopicResourceId
+    zoneNames: zoneNames
   }
-  dependsOn: [secondaryIdentity]
+  dependsOn: [primaryIdentity, secondaryIdentity]
 }
 
 module replicaWriterRole './modules/replica-writer-role.bicep' = {
@@ -154,7 +224,7 @@ module replicaWriterRole './modules/replica-writer-role.bicep' = {
   params: {
     workload: workload
     token: token
-    enabled: primary.outputs.vaultUsesRbac || secondary.outputs.vaultUsesRbac
+    enabled: stamps[0].vaultUsesRbac || stamps[1].vaultUsesRbac
   }
 }
 
@@ -162,26 +232,30 @@ module primaryVaultAccess './modules/vault-access.bicep' = {
   name: 'primary-vault-access'
   scope: resourceGroup(empty(primaryVaultResourceId) ? primaryGroup.name : split(primaryVaultResourceId, '/')[4])
   params: {
-    vaultName: primary.outputs.vaultName
-    useRbac: primary.outputs.vaultUsesRbac
-    tenantId: primary.outputs.vaultTenantId
-    readerPrincipalId: primary.outputs.principalId
-    writerPrincipalId: secondary.outputs.principalId
-    writerRoleId: replicaWriterRole.outputs.id
+    vaultName: stamps[0].vaultName
+    useRbac: stamps[0].vaultUsesRbac
+    tenantId: stamps[0].vaultTenantId
+    readerIdentityResourceId: stamps[0].identityId
+    writerIdentityResourceId: stamps[1].identityId
+    writerRoleId: replicaWriterRoleId
+    existingRoleAssignmentNames: resolvedVaultRoleAssignments
   }
+  dependsOn: [primary, secondaryIdentity, replicaWriterRole]
 }
 
 module secondaryVaultAccess './modules/vault-access.bicep' = {
   name: 'secondary-vault-access'
   scope: resourceGroup(empty(secondaryVaultResourceId) ? secondaryGroup.name : split(secondaryVaultResourceId, '/')[4])
   params: {
-    vaultName: secondary.outputs.vaultName
-    useRbac: secondary.outputs.vaultUsesRbac
-    tenantId: secondary.outputs.vaultTenantId
-    readerPrincipalId: secondary.outputs.principalId
-    writerPrincipalId: primary.outputs.principalId
-    writerRoleId: replicaWriterRole.outputs.id
+    vaultName: stamps[1].vaultName
+    useRbac: stamps[1].vaultUsesRbac
+    tenantId: stamps[1].vaultTenantId
+    readerIdentityResourceId: stamps[1].identityId
+    writerIdentityResourceId: stamps[0].identityId
+    writerRoleId: replicaWriterRoleId
+    existingRoleAssignmentNames: resolvedVaultRoleAssignments
   }
+  dependsOn: [secondary, primaryIdentity, replicaWriterRole]
 }
 
 module primaryEndpoints './modules/endpoints.bicep' = {
@@ -190,16 +264,17 @@ module primaryEndpoints './modules/endpoints.bicep' = {
   params: {
     prefix: primaryPrefix
     location: primaryLocation
-    subnetId: primary.outputs.endpointSubnetId
-    zoneIds: primary.outputs.zoneIds
-    localVaultId: primary.outputs.vaultId
-    remoteVaultId: secondary.outputs.vaultId
-    storageId: primary.outputs.storageId
-    deadletterStorageId: primary.outputs.deadletterStorageId
-    serviceBusId: primary.outputs.serviceBusId
-    monitorScopeId: primary.outputs.monitorScopeId
+    subnetId: stamps[0].endpointSubnetId
+    zoneIds: stamps[0].zoneIds
+    localVaultId: stamps[0].vaultId
+    remoteVaultId: stamps[1].vaultId
+    storageId: stamps[0].storageId
+    deadletterStorageId: stamps[0].deadletterStorageId
+    serviceBusId: resourceId(subscription().subscriptionId, primaryGroup.name, 'Microsoft.ServiceBus/namespaces', 'sb-${primaryPrefix}')
+    monitorScopeId: stamps[0].monitorScopeId
     tags: tags
   }
+  dependsOn: [primary, secondary]
 }
 
 module secondaryEndpoints './modules/endpoints.bicep' = {
@@ -208,16 +283,17 @@ module secondaryEndpoints './modules/endpoints.bicep' = {
   params: {
     prefix: secondaryPrefix
     location: secondaryLocation
-    subnetId: secondary.outputs.endpointSubnetId
-    zoneIds: secondary.outputs.zoneIds
-    localVaultId: secondary.outputs.vaultId
-    remoteVaultId: primary.outputs.vaultId
-    storageId: secondary.outputs.storageId
-    deadletterStorageId: secondary.outputs.deadletterStorageId
-    serviceBusId: secondary.outputs.serviceBusId
-    monitorScopeId: secondary.outputs.monitorScopeId
+    subnetId: stamps[1].endpointSubnetId
+    zoneIds: stamps[1].zoneIds
+    localVaultId: stamps[1].vaultId
+    remoteVaultId: stamps[0].vaultId
+    storageId: stamps[1].storageId
+    deadletterStorageId: stamps[1].deadletterStorageId
+    serviceBusId: resourceId(subscription().subscriptionId, secondaryGroup.name, 'Microsoft.ServiceBus/namespaces', 'sb-${secondaryPrefix}')
+    monitorScopeId: stamps[1].monitorScopeId
     tags: tags
   }
+  dependsOn: [primary, secondary]
 }
 
 module primaryApp './modules/function-app.bicep' = {
@@ -226,11 +302,11 @@ module primaryApp './modules/function-app.bicep' = {
   params: {
     prefix: primaryPrefix
     location: primaryLocation
-    foundation: primary.outputs.runtime
-    sourceVaultId: primary.outputs.vaultId
-    sourceVaultUri: primary.outputs.vaultUri
-    destinationVaultUri: secondary.outputs.vaultUri
-    destinationVaultId: secondary.outputs.vaultId
+    foundation: stamps[0].runtime
+    sourceVaultId: stamps[0].vaultId
+    sourceVaultUri: stamps[0].vaultUri
+    destinationVaultUri: stamps[1].vaultUri
+    destinationVaultId: stamps[1].vaultId
     secretNames: secretNames
     secretPrefix: secretPrefix
     replicateAllSecrets: replicateAllSecrets
@@ -251,11 +327,11 @@ module secondaryApp './modules/function-app.bicep' = {
   params: {
     prefix: secondaryPrefix
     location: secondaryLocation
-    foundation: secondary.outputs.runtime
-    sourceVaultId: secondary.outputs.vaultId
-    sourceVaultUri: secondary.outputs.vaultUri
-    destinationVaultUri: primary.outputs.vaultUri
-    destinationVaultId: primary.outputs.vaultId
+    foundation: stamps[1].runtime
+    sourceVaultId: stamps[1].vaultId
+    sourceVaultUri: stamps[1].vaultUri
+    destinationVaultUri: stamps[0].vaultUri
+    destinationVaultId: stamps[0].vaultId
     secretNames: secretNames
     secretPrefix: secretPrefix
     replicateAllSecrets: replicateAllSecrets
@@ -274,9 +350,9 @@ module primaryRouting './modules/event-routing.bicep' = {
   name: 'primary-routing'
   scope: resourceGroup(empty(primarySystemTopicResourceId) ? primaryGroup.name : split(primarySystemTopicResourceId, '/')[4])
   params: {
-    topicName: primary.outputs.topicName
-    queueId: primary.outputs.queueId
-    deadletterStorageId: primary.outputs.deadletterStorageId
+    topicName: stamps[0].topicName
+    queueId: stamps[0].queueId
+    deadletterStorageId: stamps[0].deadletterStorageId
     enabled: enableEventRouting && authoritativeRegion == 'primary'
     subscriptionName: empty(primarySystemTopicResourceId) ? 'secret-events' : '${workload}-${token}-secret-events'
   }
@@ -289,9 +365,9 @@ module secondaryRouting './modules/event-routing.bicep' = {
   name: 'secondary-routing'
   scope: resourceGroup(empty(secondarySystemTopicResourceId) ? secondaryGroup.name : split(secondarySystemTopicResourceId, '/')[4])
   params: {
-    topicName: secondary.outputs.topicName
-    queueId: secondary.outputs.queueId
-    deadletterStorageId: secondary.outputs.deadletterStorageId
+    topicName: stamps[1].topicName
+    queueId: stamps[1].queueId
+    deadletterStorageId: stamps[1].deadletterStorageId
     enabled: enableEventRouting && authoritativeRegion == 'secondary'
     subscriptionName: empty(secondarySystemTopicResourceId) ? 'secret-events' : '${workload}-${token}-secret-events'
   }
@@ -302,30 +378,30 @@ module secondaryRouting './modules/event-routing.bicep' = {
 
 output primaryResources object = {
   resourceGroup: primaryGroup.name
-  functionApp: primaryApp.outputs.name
-  vault: primary.outputs.vaultName
-  vaultUri: primary.outputs.vaultUri
-  vaultResourceId: primary.outputs.vaultId
-  vaultResourceGroup: primary.outputs.vaultResourceGroup
+  functionApp: 'func-${primaryPrefix}'
+  vault: stamps[0].vaultName
+  vaultUri: stamps[0].vaultUri
+  vaultResourceId: stamps[0].vaultId
+  vaultResourceGroup: empty(primaryVaultResourceId) ? primaryGroup.name : split(primaryVaultResourceId, '/')[4]
   vaultIsExisting: !empty(primaryVaultResourceId)
-  vaultAuthorizationModel: primary.outputs.vaultUsesRbac ? 'rbac' : 'accessPolicy'
-  storage: primary.outputs.storageName
-  serviceBus: primary.outputs.serviceBusName
-  identityClientId: primary.outputs.clientId
-  identityPrincipalId: primary.outputs.principalId
+  vaultAuthorizationModel: stamps[0].vaultUsesRbac ? 'rbac' : 'accessPolicy'
+  storage: stamps[0].runtime.storageName
+  serviceBus: 'sb-${primaryPrefix}'
+  identityClientId: primaryIdentity.outputs.clientId
+  identityPrincipalId: primaryIdentity.outputs.principalId
 }
 
 output secondaryResources object = {
   resourceGroup: secondaryGroup.name
-  functionApp: secondaryApp.outputs.name
-  vault: secondary.outputs.vaultName
-  vaultUri: secondary.outputs.vaultUri
-  vaultResourceId: secondary.outputs.vaultId
-  vaultResourceGroup: secondary.outputs.vaultResourceGroup
+  functionApp: 'func-${secondaryPrefix}'
+  vault: stamps[1].vaultName
+  vaultUri: stamps[1].vaultUri
+  vaultResourceId: stamps[1].vaultId
+  vaultResourceGroup: empty(secondaryVaultResourceId) ? secondaryGroup.name : split(secondaryVaultResourceId, '/')[4]
   vaultIsExisting: !empty(secondaryVaultResourceId)
-  vaultAuthorizationModel: secondary.outputs.vaultUsesRbac ? 'rbac' : 'accessPolicy'
-  storage: secondary.outputs.storageName
-  serviceBus: secondary.outputs.serviceBusName
-  identityClientId: secondary.outputs.clientId
-  identityPrincipalId: secondary.outputs.principalId
+  vaultAuthorizationModel: stamps[1].vaultUsesRbac ? 'rbac' : 'accessPolicy'
+  storage: stamps[1].runtime.storageName
+  serviceBus: 'sb-${secondaryPrefix}'
+  identityClientId: secondaryIdentity.outputs.clientId
+  identityPrincipalId: secondaryIdentity.outputs.principalId
 }

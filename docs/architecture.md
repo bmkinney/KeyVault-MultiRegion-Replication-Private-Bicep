@@ -147,6 +147,16 @@ worker object/principal IDs, without a parent-vault PUT or whole-list replacemen
 Role assignments and the custom role are conditional on effective RBAC use.
 The worker SDK/authentication is unchanged; non-vault services still use RBAC.
 
+Deployment modules exchange deterministic ARM IDs instead of runtime module
+outputs. The runner discovers existing-vault model/tenant/URI before preview and
+preserves prior vault role-assignment names through read-only IAM inventory when
+RBAC is in use. Identity principal/client IDs and the Insights connection string
+are resolved inside resource properties; explicit dependencies retain actual
+deployment order. This avoids the known cross-module what-if short-circuiting
+pattern without requiring users to edit templates or deploy identities first.
+The runner rejects incomplete preview coverage rather than treating CLI exit 0
+as sufficient approval.
+
 No queue storage binding uses the runtime Queue endpoint today. The account
 supports it and the private endpoint is provisioned for host compatibility;
 no speculative Queue Data Contributor role is assigned.
