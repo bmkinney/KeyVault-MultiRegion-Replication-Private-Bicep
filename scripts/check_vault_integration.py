@@ -12,7 +12,7 @@ from uuid import UUID
 
 RESOURCE_ID = re.compile(
     r"^/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/"
-    r"(Microsoft\.KeyVault/vaults|Microsoft\.EventGrid/systemTopics)/([^/]+)$",
+    r"(Microsoft\.KeyVault/vaults|Microsoft\.EventGrid/systemTopics|Microsoft\.ManagedIdentity/userAssignedIdentities)/([^/]+)$",
     re.IGNORECASE,
 )
 SECRET_NAME = re.compile(r"^[A-Za-z0-9-]{1,127}$")
@@ -52,6 +52,22 @@ def validate_id(resource_id, subscription, kind):
 
 def preflight(parameters, subscription, query=azure_json):
     value = lambda name, default=None: parameters.get(name, {}).get("value", default)
+    manage = value("managePermissions", True)
+    if not isinstance(manage, bool):
+        raise ValueError("managePermissions must be a boolean")
+    worker_ids = [value(f"{side}WorkerIdentityResourceId", "") for side in ("primary", "secondary")]
+    for worker_id in worker_ids:
+        if not isinstance(worker_id, str):
+            raise ValueError("Worker identity resource IDs must be strings")
+        if worker_id:
+            validate_id(worker_id, subscription, "Microsoft.ManagedIdentity/userAssignedIdentities")
+    if worker_ids[0] and worker_ids[0].lower() == worker_ids[1].lower():
+        raise ValueError("Regional workers must use different identities")
+    if not manage:
+        for side in ("primary", "secondary"):
+            for suffix in ("WorkerIdentityResourceId", "VaultResourceId", "SystemTopicResourceId"):
+                if not value(f"{side}{suffix}", ""):
+                    raise ValueError(f"managePermissions = false requires {side}{suffix}; administrators must provision resources and grants first")
     vault_ids = [value("primaryVaultResourceId", ""), value("secondaryVaultResourceId", "")]
     if vault_ids[0] and vault_ids[0].lower() == vault_ids[1].lower():
         raise ValueError("Source and destination must be different vaults")
@@ -160,9 +176,45 @@ def preflight(parameters, subscription, query=azure_json):
     return resolved_vaults
 
 
-def existing_role_assignment_names(workload, subscription, query):
-    identities = query("identity", "list", "--subscription", subscription)
-    owned = {}
+def preflight_workers(parameters, subscription, vaults, query):
+    worker_ids = [parameters.get(f"{side}WorkerIdentityResourceId", {}).get("value", "") for side in ("primary", "secondary")]
+    if not any(worker_ids):
+        return {}
+    account = query("account", "show", "--subscription", subscription)
+    tenant_id = account["tenantId"]
+    UUID(tenant_id)
+    if any(vault["tenantId"].lower() != tenant_id.lower() for vault in vaults.values()):
+        raise ValueError("Selected vaults and worker identities must share the deployment tenant")
+    resolved = {}
+    for worker_id in worker_ids:
+        if not worker_id:
+            continue
+        identity = query(
+            "resource", "show", "--ids", worker_id, "--subscription", subscription,
+            "--api-version", "2024-11-30",
+        )
+        if identity.get("id", "").lower() != worker_id.lower():
+            raise ValueError("Azure returned a different worker identity resource ID")
+        props = identity["properties"]
+        metadata = {}
+        for field in ("principalId", "clientId", "tenantId"):
+            value = props.get(field)
+            if not isinstance(value, str):
+                raise ValueError(f"Existing worker identity {field} is missing")
+            UUID(value)
+            metadata[field] = value
+        if metadata["tenantId"].lower() != tenant_id.lower():
+            raise ValueError("Existing worker identity belongs to a different tenant")
+        if any(item["principalId"].lower() == metadata["principalId"].lower() for item in resolved.values()):
+            raise ValueError("Regional worker identities must have different principal IDs")
+        resolved[worker_id.lower()] = metadata
+    return resolved
+
+
+def existing_role_assignment_names(workload, subscription, query, known_identities=None):
+    known_identities = known_identities or {}
+    identities = query("identity", "list", "--subscription", subscription) if len(known_identities) < 2 else []
+    owned = {metadata["principalId"].lower(): identity_id for identity_id, metadata in known_identities.items()}
     for identity in identities:
         match = re.fullmatch(rf"id-{re.escape(workload)}-([ps])-([a-z0-9]{{8}})-worker", identity["name"])
         if not match:
@@ -201,16 +253,20 @@ def prepare_parameters(document, subscription, query=azure_json):
     prepared = copy.deepcopy(document)
     parameters = prepared["parameters"]
     resolved = preflight(parameters, subscription, query)
+    workers = preflight_workers(parameters, subscription, resolved, query)
     uses_rbac = any(vault["usesRbac"] for vault in resolved.values()) or any(
         not parameters.get(f"{side}VaultResourceId", {}).get("value", "")
         and parameters.get(f"{side}VaultAuthorizationModel", {}).get("value", "accessPolicy") == "rbac"
         for side in ("primary", "secondary")
     )
     assignments = existing_role_assignment_names(
-        parameters.get("workload", {}).get("value", "mrkv"), subscription, query,
-    ) if uses_rbac else {}
+        parameters.get("workload", {}).get("value", "mrkv"), subscription, query, workers,
+    ) if uses_rbac and parameters.get("managePermissions", {}).get("value", True) else {}
     parameters["resolvedExistingVaults"] = {"value": resolved}
     parameters["resolvedVaultRoleAssignments"] = {"value": assignments}
+    parameters["resolvedWorkerIdentities"] = {"value": workers}
+    if not parameters.get("managePermissions", {}).get("value", True):
+        print("External-permissions mode: IAM writes and role-assignment inventory are disabled. Administrator grants and data-plane readiness must be verified separately.")
     return prepared
 
 
@@ -225,7 +281,8 @@ def main():
         prepared = prepare_parameters(document, args.subscription)
         Path(args.output_parameters).write_text(json.dumps(prepared, indent=2), encoding="utf-8")
     else:
-        preflight(document["parameters"], args.subscription)
+        vaults = preflight(document["parameters"], args.subscription)
+        preflight_workers(document["parameters"], args.subscription, vaults, azure_json)
 
 
 if __name__ == "__main__":

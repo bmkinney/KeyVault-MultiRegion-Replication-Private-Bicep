@@ -23,12 +23,17 @@ Select a subscription and check:
 - Provider registrations: Microsoft.Network, Microsoft.Storage, Microsoft.Web,
   Microsoft.App, Microsoft.KeyVault, Microsoft.EventGrid, Microsoft.ServiceBus,
   Microsoft.ManagedIdentity, Microsoft.Insights, Microsoft.OperationalInsights.
-- Permission to deploy subscription/resource-group resources and assign roles.
+- Permission to deploy subscription/resource-group resources. The default
+  `managePermissions = true` mode additionally requires permission to assign roles.
   Contributor alone does not grant role-assignment write permissions. RBAC
   vaults also require custom-role-definition write permission; policy-based
   vaults require `Microsoft.KeyVault/vaults/accessPolicies/write` at their scopes.
   Storage, Service Bus, Event Grid delivery, and monitoring still use RBAC even
   when both vaults use access policies.
+- For Contributor-only operators, use the [external-permissions procedure](deployment-contributor.md)
+  and `infra\parameters\contributor.example.bicepparam`. Administrators prepare
+  identities/resources/grants separately; `managePermissions = false` omits all
+  role definitions, role assignments, and vault policy updates.
 - Nonoverlapping CIDRs with the deployment network.
 - Global name availability for vault, storage, namespace, and app names.
 - Operator private access to both monitoring DNS views. Do not merge two AMPLS
@@ -52,7 +57,14 @@ be available. Leave vault IDs empty to retain new-vault behavior.
 
 Copy the appropriate example to `infra\parameters\deployment.local.bicepparam`
 (Git-ignored) and edit that file only. Do not change Bicep files or supply worker
-principal/client IDs: the template creates both identities automatically.
+principal/client IDs. By default the template creates both worker identities.
+Set either `primaryWorkerIdentityResourceId` or `secondaryWorkerIdentityResourceId`
+to reuse a same-subscription, same-tenant user-assigned identity, including one in
+another resource group. The runner discovers its principal/client IDs read-only.
+An empty ID still creates that worker when `managePermissions = true`.
+Both regional workers must use distinct identities. Reuse alone does not remove
+the caller's IAM-write requirements; use `managePermissions = false` and its
+administrator prerequisites for that.
 Set a real `alertEmail` before operational use. Do not commit personal recipients
 if your organization treats them as private information.
 
@@ -90,13 +102,14 @@ named Update. No key, certificate, delete, purge, backup, or restore permission 
 granted. Use managed-identity **principal/object IDs**, not client IDs, in policies.
 The same identity-authenticated worker code serves both models.
 
-For a reused policy-based vault, one child `accessPolicies/add` request adds both
+With `managePermissions = true`, a reused policy-based vault's child
+`accessPolicies/add` request adds both
 worker entries without replacing the full list or unrelated principals' entries.
 The managed identities and vault must share the subscription's Entra tenant;
 confirm existing policy capacity (maximum 1,024 entries) and effective permissions.
 
 For a solution-managed vault, the template owns its complete policy list. Both
-identities are created first so vault creation/redeployment includes both worker
+identities are available first so vault creation/redeployment includes both worker
 grants rather than clearing the list and restoring them later. Managed vaults do
 not also receive a redundant child `accessPolicies/add` deployment. Extra policies
 added outside this template are not preserved on a managed-vault redeployment.
@@ -117,8 +130,9 @@ resources when their conditions become false.
 Microsoft supports both models but recommends RBAC: principals with vault-write
 control, such as Contributor/Key Vault Contributor, can grant themselves data
 access on policy-based vaults. Review that privilege boundary with the customer.
-The custom replica role is defined only when at least one selected vault uses
-RBAC; assignments are made only on RBAC vaults.
+In managed-permissions mode the custom replica role is defined only when at least
+one selected vault uses RBAC; vault assignments are made only on RBAC vaults.
+External-permissions mode leaves every grant to administrators.
 
 ## 3. Validate, preview, and deploy infrastructure
 
@@ -134,14 +148,15 @@ For a local parameter file, use:
 ```
 
 The runner compiles this file and performs read-only discovery of reused-vault
-authorization models, tenant IDs, and vault URIs. When either vault uses RBAC,
+authorization models, tenant IDs, vault URIs, and explicitly selected worker
+identity metadata. When either vault uses RBAC and `managePermissions = true`,
 it also inventories existing solution-worker identities and their vault role
 assignments. Previously deployed assignment names are retained to avoid
 `RoleAssignmentExists`; new assignments use deterministic vault/identity ARM
 IDs and role IDs, not runtime principal IDs.
 
-Discovery populates internal `resolvedExistingVaults` and
-`resolvedVaultRoleAssignments` parameters in a temporary JSON file. **Do not add
+Discovery populates internal `resolvedExistingVaults`, `resolvedWorkerIdentities`,
+and `resolvedVaultRoleAssignments` parameters in a temporary JSON file. **Do not add
 these parameters to your `.bicepparam` file.** The runner refreshes them on each
 invocation, leaves the user file untouched, and removes temporary files on exit.
 ARM validation, what-if, and optional create all use that same prepared snapshot.
@@ -168,8 +183,10 @@ review a fresh preview whenever parameters or existing configuration change.
 Managed-vault policies do not require a separate identity-bootstrap deployment
 or user template changes. First-time integration with an existing policy-based
 vault can still be blocked if Azure cannot predict its additive policy update
-while worker principal IDs are unresolved; this is not permission to bypass the
-coverage gate.
+while newly created worker principal IDs are unresolved. Reusing precreated
+workers supplies known principal IDs; external-permissions mode omits that policy
+update altogether. Neither option weakens the coverage gate or guarantees
+noise-free Azure analysis.
 
 Do not reuse names to "adopt" preexisting vaults. Supply their full resource IDs
 through the explicit existing-vault parameters instead. Existing resources are

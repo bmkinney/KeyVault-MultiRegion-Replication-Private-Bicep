@@ -17,6 +17,18 @@ param primaryVaultResourceId string = ''
 @description('Existing secondary vault ARM ID in this subscription; empty creates a vault.')
 param secondaryVaultResourceId string = ''
 
+@description('Existing primary worker user-assigned identity ARM ID in this subscription; empty creates one in managed-permissions mode.')
+param primaryWorkerIdentityResourceId string = ''
+
+@description('Existing secondary worker user-assigned identity ARM ID in this subscription; empty creates one in managed-permissions mode.')
+param secondaryWorkerIdentityResourceId string = ''
+
+@description('Create role definitions, assignments, and vault policies. False leaves IAM to administrators and requires existing workers, vaults, and system topics.')
+param managePermissions bool = true
+
+@description('Internal existing-worker identity metadata populated by Deploy.ps1; do not supply principal/client IDs manually.')
+param resolvedWorkerIdentities object = {}
+
 @description('Authorization for a solution-managed primary vault. Reused vaults retain their detected model.')
 @allowed(['accessPolicy', 'rbac'])
 param primaryVaultAuthorizationModel string = 'accessPolicy'
@@ -120,6 +132,7 @@ var stampInputs = [
     vaultId: primaryVaultResourceId
     authorizationModel: primaryVaultAuthorizationModel
     topicId: primarySystemTopicResourceId
+    workerId: primaryWorkerIdentityResourceId
   }
   {
     prefix: secondaryPrefix
@@ -128,11 +141,13 @@ var stampInputs = [
     vaultId: secondaryVaultResourceId
     authorizationModel: secondaryVaultAuthorizationModel
     topicId: secondarySystemTopicResourceId
+    workerId: secondaryWorkerIdentityResourceId
   }
 ]
 
 var stamps = [for stamp in stampInputs: {
-  identityId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.ManagedIdentity/userAssignedIdentities', 'id-${stamp.prefix}-worker')
+  identityId: empty(stamp.workerId) ? resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.ManagedIdentity/userAssignedIdentities', 'id-${stamp.prefix}-worker') : stamp.workerId
+  principalId: empty(stamp.workerId) ? '' : resolvedWorkerIdentities[toLower(stamp.workerId)].principalId
   vaultId: empty(stamp.vaultId) ? resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.KeyVault/vaults', 'kv-${stamp.prefix}') : stamp.vaultId
   vaultName: empty(stamp.vaultId) ? 'kv-${stamp.prefix}' : last(split(stamp.vaultId, '/'))
   vaultUri: empty(stamp.vaultId) ? 'https://kv-${stamp.prefix}${environment().suffixes.keyvaultDns}/' : resolvedExistingVaults[toLower(stamp.vaultId)].vaultUri
@@ -146,7 +161,7 @@ var stamps = [for stamp in stampInputs: {
   endpointSubnetId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/virtualNetworks/subnets', 'vnet-${stamp.prefix}', 'endpoints')
   zoneIds: toObject(items(zoneNames), zone => zone.key, zone => resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/privateDnsZones', zone.value))
   runtime: {
-    identityId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.ManagedIdentity/userAssignedIdentities', 'id-${stamp.prefix}-worker')
+    identityId: empty(stamp.workerId) ? resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.ManagedIdentity/userAssignedIdentities', 'id-${stamp.prefix}-worker') : stamp.workerId
     storageName: 'st${stamp.storageToken}run'
     storageBlobUri: 'https://st${stamp.storageToken}run.blob.${environment().suffixes.storage}/'
     busNamespace: 'sb-${stamp.prefix}.servicebus.windows.net'
@@ -161,7 +176,7 @@ var stamps = [for stamp in stampInputs: {
 
 var replicaWriterRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', guid(subscription().id, workload, 'secret-replica-writer'))
 
-module primaryIdentity './modules/worker-identity.bicep' = {
+module primaryIdentity './modules/worker-identity.bicep' = if (managePermissions && empty(primaryWorkerIdentityResourceId)) {
   name: 'primary-worker-identity'
   scope: primaryGroup
   params: {
@@ -171,7 +186,7 @@ module primaryIdentity './modules/worker-identity.bicep' = {
   }
 }
 
-module secondaryIdentity './modules/worker-identity.bicep' = {
+module secondaryIdentity './modules/worker-identity.bicep' = if (managePermissions && empty(secondaryWorkerIdentityResourceId)) {
   name: 'secondary-worker-identity'
   scope: secondaryGroup
   params: {
@@ -193,6 +208,10 @@ module primary './modules/foundation.bicep' = {
     tags: tags
     existingVaultResourceId: primaryVaultResourceId
     vaultAuthorizationModel: primaryVaultAuthorizationModel
+    managePermissions: managePermissions
+    workerIdentityResourceId: stamps[0].identityId
+    workerPrincipalId: stamps[0].principalId
+    replicaWriterPrincipalId: stamps[1].principalId
     replicaWriterIdentityResourceId: stamps[1].identityId
     existingSystemTopicResourceId: primarySystemTopicResourceId
     zoneNames: zoneNames
@@ -212,6 +231,10 @@ module secondary './modules/foundation.bicep' = {
     tags: tags
     existingVaultResourceId: secondaryVaultResourceId
     vaultAuthorizationModel: secondaryVaultAuthorizationModel
+    managePermissions: managePermissions
+    workerIdentityResourceId: stamps[1].identityId
+    workerPrincipalId: stamps[1].principalId
+    replicaWriterPrincipalId: stamps[0].principalId
     replicaWriterIdentityResourceId: stamps[0].identityId
     existingSystemTopicResourceId: secondarySystemTopicResourceId
     zoneNames: zoneNames
@@ -219,7 +242,7 @@ module secondary './modules/foundation.bicep' = {
   dependsOn: [primaryIdentity, secondaryIdentity]
 }
 
-module replicaWriterRole './modules/replica-writer-role.bicep' = {
+module replicaWriterRole './modules/replica-writer-role.bicep' = if (managePermissions) {
   name: '${workload}-${token}-replica-writer-role'
   params: {
     workload: workload
@@ -228,7 +251,7 @@ module replicaWriterRole './modules/replica-writer-role.bicep' = {
   }
 }
 
-module primaryVaultAccess './modules/vault-access.bicep' = {
+module primaryVaultAccess './modules/vault-access.bicep' = if (managePermissions) {
   name: 'primary-vault-access'
   scope: resourceGroup(empty(primaryVaultResourceId) ? primaryGroup.name : split(primaryVaultResourceId, '/')[4])
   params: {
@@ -238,13 +261,15 @@ module primaryVaultAccess './modules/vault-access.bicep' = {
     tenantId: stamps[0].vaultTenantId
     readerIdentityResourceId: stamps[0].identityId
     writerIdentityResourceId: stamps[1].identityId
+    readerPrincipalId: stamps[0].principalId
+    writerPrincipalId: stamps[1].principalId
     writerRoleId: replicaWriterRoleId
     existingRoleAssignmentNames: resolvedVaultRoleAssignments
   }
   dependsOn: [primary, secondaryIdentity, replicaWriterRole]
 }
 
-module secondaryVaultAccess './modules/vault-access.bicep' = {
+module secondaryVaultAccess './modules/vault-access.bicep' = if (managePermissions) {
   name: 'secondary-vault-access'
   scope: resourceGroup(empty(secondaryVaultResourceId) ? secondaryGroup.name : split(secondaryVaultResourceId, '/')[4])
   params: {
@@ -254,6 +279,8 @@ module secondaryVaultAccess './modules/vault-access.bicep' = {
     tenantId: stamps[1].vaultTenantId
     readerIdentityResourceId: stamps[1].identityId
     writerIdentityResourceId: stamps[0].identityId
+    readerPrincipalId: stamps[1].principalId
+    writerPrincipalId: stamps[0].principalId
     writerRoleId: replicaWriterRoleId
     existingRoleAssignmentNames: resolvedVaultRoleAssignments
   }
@@ -389,8 +416,9 @@ output primaryResources object = {
   vaultAuthorizationModel: stamps[0].vaultUsesRbac ? 'rbac' : 'accessPolicy'
   storage: stamps[0].runtime.storageName
   serviceBus: 'sb-${primaryPrefix}'
-  identityClientId: primaryIdentity.outputs.clientId
-  identityPrincipalId: primaryIdentity.outputs.principalId
+  identityResourceId: stamps[0].identityId
+  identityClientId: empty(primaryWorkerIdentityResourceId) ? primaryIdentity!.outputs.clientId : resolvedWorkerIdentities[toLower(primaryWorkerIdentityResourceId)].clientId
+  identityPrincipalId: empty(primaryWorkerIdentityResourceId) ? primaryIdentity!.outputs.principalId : stamps[0].principalId
 }
 
 output secondaryResources object = {
@@ -404,6 +432,7 @@ output secondaryResources object = {
   vaultAuthorizationModel: stamps[1].vaultUsesRbac ? 'rbac' : 'accessPolicy'
   storage: stamps[1].runtime.storageName
   serviceBus: 'sb-${secondaryPrefix}'
-  identityClientId: secondaryIdentity.outputs.clientId
-  identityPrincipalId: secondaryIdentity.outputs.principalId
+  identityResourceId: stamps[1].identityId
+  identityClientId: empty(secondaryWorkerIdentityResourceId) ? secondaryIdentity!.outputs.clientId : resolvedWorkerIdentities[toLower(secondaryWorkerIdentityResourceId)].clientId
+  identityPrincipalId: empty(secondaryWorkerIdentityResourceId) ? secondaryIdentity!.outputs.principalId : stamps[1].principalId
 }

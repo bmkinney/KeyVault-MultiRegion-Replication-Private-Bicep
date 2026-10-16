@@ -46,6 +46,7 @@ function python {
     $prepared = Get-Content -LiteralPath $env:TEST_PARAMETERS -Raw | ConvertFrom-Json
     $prepared.parameters | Add-Member -NotePropertyName resolvedExistingVaults -NotePropertyValue @{ value = @{} }
     $prepared.parameters | Add-Member -NotePropertyName resolvedVaultRoleAssignments -NotePropertyValue @{ value = @{} }
+    $prepared.parameters | Add-Member -NotePropertyName resolvedWorkerIdentities -NotePropertyValue @{ value = @{} }
     $prepared | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $args[$index + 1]
 }
 try {
@@ -104,6 +105,7 @@ class DeploymentRunnerTests(unittest.TestCase):
                     for call in commands:
                         self.assertIn("resolvedExistingVaults", call["parameters"]["parameters"])
                         self.assertIn("resolvedVaultRoleAssignments", call["parameters"]["parameters"])
+                        self.assertIn("resolvedWorkerIdentities", call["parameters"]["parameters"])
                     self.assertIn("--no-pretty-print", commands[1]["arguments"])
                     self.assertEqual(
                         commands[1]["arguments"][commands[1]["arguments"].index("--result-format") + 1],

@@ -43,7 +43,10 @@ from `scripts\Deploy.ps1`, before ARM validation/what-if/deployment. It requires
 The account running preflight must read both vault resources and subscription
 system topics; failure to inventory is a blocking error, not permission to
 create a duplicate. With RBAC on either selected vault, preparation also requires
-subscription-wide user-assigned-identity and role-assignment read permissions.
+subscription-wide role-assignment read permissions in managed-permissions mode.
+Subscription-wide identity listing is needed only when both workers have not
+been explicitly supplied and discovered. External-permissions mode needs neither
+inventory.
 The runner filters that inventory to matching solution-worker identities and
 vault scopes, retaining already deployed role-assignment names without deleting
 or recreating grants. It disables Graph principal-name and role-name lookups;
@@ -94,6 +97,16 @@ Storage, Service Bus, Event Grid, and monitoring still require RBAC. Preflight
 reads configuration, topics, and, when needed, existing IAM metadata only; it
 cannot establish worker data access or permission propagation. Verify actual
 access before activation.
+
+These grant writes apply to the default `managePermissions = true` workflow.
+For Contributor-only operators, use [external-permissions mode](deployment-contributor.md):
+administrators prepare both workers/vaults/topics and all grants, and
+`managePermissions = false` skips every policy/role write. This mode does not
+require role-assignment inventory. Explicit worker identity IDs are read directly;
+their principal/client IDs and tenant are discovered before preview. In managed
+mode that known metadata also avoids unresolved newly created principals when
+previewing an existing vault's additive policy update. Neither mode claims to
+validate effective runtime access from configuration alone.
 
 Microsoft supports both models but recommends RBAC for separation of duties:
 vault-write control lets principals grant themselves data permissions under

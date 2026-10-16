@@ -41,16 +41,77 @@ def module_reference(side, name):
     return f"reference({module_id(side, name)}, '2025-04-01')"
 
 
-def identity_reference(parameter):
+def identity_id(parameter):
     return (
-        "reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', "
+        "extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', "
         f"subscription().subscriptionId, split(parameters('{parameter}'), '/')[4]), "
-        f"'Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('{parameter}'), '/'))), "
-        "'2024-11-30').principalId"
+        f"'Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('{parameter}'), '/')))"
+    )
+
+
+def identity_reference(parameter):
+    return f"reference({identity_id(parameter)}, '2024-11-30').principalId"
+
+
+def selected_principal(identity_parameter, principal_parameter):
+    return (
+        f"if(empty(parameters('{principal_parameter}')), {identity_reference(identity_parameter)}, "
+        f"parameters('{principal_parameter}'))"
     )
 
 
 class InfrastructureTests(unittest.TestCase):
+    def test_existing_worker_ids_and_known_principals_are_wired_without_redeployment(self):
+        self.assertTrue(TEMPLATE["parameters"]["managePermissions"]["defaultValue"])
+        self.assertEqual(TEMPLATE["parameters"]["resolvedWorkerIdentities"]["defaultValue"], {})
+        stamp = next(item for item in TEMPLATE["variables"]["copy"] if item["name"] == "stamps")["input"]
+        self.assertEqual(stamp["runtime"]["identityId"], stamp["identityId"])
+        self.assertIn("parameters('resolvedWorkerIdentities')", stamp["principalId"])
+        for side, index in (("primary", 0), ("secondary", 1)):
+            self.assertEqual(TEMPLATE["parameters"][f"{side}WorkerIdentityResourceId"]["defaultValue"], "")
+            creation = deployment(f"{side}-worker-identity")
+            self.assertEqual(
+                creation["condition"],
+                f"[and(parameters('managePermissions'), empty(parameters('{side}WorkerIdentityResourceId')))]",
+            )
+            foundation = deployment(f"{side}-foundation")["properties"]["parameters"]
+            self.assertEqual(foundation["workerIdentityResourceId"]["value"], f"[variables('stamps')[{index}].identityId]")
+            self.assertEqual(foundation["workerPrincipalId"]["value"], f"[variables('stamps')[{index}].principalId]")
+            access = deployment(f"{side}-vault-access")["properties"]["parameters"]
+            self.assertEqual(access["readerPrincipalId"]["value"], f"[variables('stamps')[{index}].principalId]")
+            self.assertEqual(access["writerPrincipalId"]["value"], f"[variables('stamps')[{1 - index}].principalId]")
+            self.assertEqual(TEMPLATE["outputs"][f"{side}Resources"]["value"]["identityResourceId"],
+                             f"[variables('stamps')[{index}].identityId]")
+
+    def test_external_permissions_mode_has_no_active_iam_or_principal_creation_paths(self):
+        protected = 0
+
+        def check(template, inherited=False):
+            nonlocal protected
+            for resource in template.get("resources", []):
+                condition = resource.get("condition", "")
+                gated = inherited or condition == "[parameters('managePermissions')]" or condition.startswith(
+                    "[and(parameters('managePermissions'), "
+                )
+                kind = resource["type"]
+                if kind.startswith("Microsoft.Authorization/") or kind in (
+                    "Microsoft.ManagedIdentity/userAssignedIdentities",
+                    "Microsoft.KeyVault/vaults", "Microsoft.KeyVault/vaults/accessPolicies",
+                    "Microsoft.EventGrid/systemTopics",
+                ):
+                    protected += 1
+                    self.assertTrue(gated, f"Unprotected external-mode write: {kind} {resource['name']}")
+                if kind == "Microsoft.Resources/deployments":
+                    params = resource["properties"].get("parameters", {})
+                    if resource["name"].endswith("-foundation"):
+                        self.assertEqual(params["managePermissions"]["value"], "[parameters('managePermissions')]")
+                    check(resource["properties"]["template"], gated)
+
+        check(TEMPLATE)
+        self.assertGreaterEqual(protected, 20)
+        for side in ("primary", "secondary"):
+            self.assertEqual(deployment(f"{side}-vault-access")["condition"], "[parameters('managePermissions')]")
+
     def test_all_module_inputs_and_resource_enumeration_are_transitively_runtime_free(self):
         checked = 0
 
@@ -162,7 +223,9 @@ class InfrastructureTests(unittest.TestCase):
             )
             self.assertEqual(
                 main_outputs["identityPrincipalId"],
-                f"[{module_reference(side, 'worker-identity')}.outputs.principalId.value]",
+                f"[if(empty(parameters('{side}WorkerIdentityResourceId')), "
+                f"{module_reference(side, 'worker-identity')}.outputs.principalId.value, "
+                f"variables('stamps')[{0 if side == 'primary' else 1}].principalId)]",
             )
 
     def test_vault_grants_use_effective_model_tenant_and_correct_worker_principals(self):
@@ -193,12 +256,12 @@ class InfrastructureTests(unittest.TestCase):
             self.assertEqual(policy["properties"]["accessPolicies"], [
                 {
                     "tenantId": "[parameters('tenantId')]",
-                    "objectId": f"[{identity_reference('readerIdentityResourceId')}]",
+                    "objectId": f"[{selected_principal('readerIdentityResourceId', 'readerPrincipalId')}]",
                     "permissions": {"secrets": ["get", "list"]},
                 },
                 {
                     "tenantId": "[parameters('tenantId')]",
-                    "objectId": f"[{identity_reference('writerIdentityResourceId')}]",
+                    "objectId": f"[{selected_principal('writerIdentityResourceId', 'writerPrincipalId')}]",
                     "permissions": {"secrets": ["get", "list", "set"]},
                 },
             ])
@@ -242,13 +305,12 @@ class InfrastructureTests(unittest.TestCase):
             nested = properties["template"]
             reader = (
                 "createObject('tenantId', subscription().tenantId, 'objectId', "
-                "reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', "
-                "format('id-{0}-worker', parameters('prefix'))), '2024-11-30').principalId, "
+                f"{selected_principal('workerIdentityResourceId', 'workerPrincipalId')}, "
                 "'permissions', createObject('secrets', createArray('get', 'list')))"
             )
             writer = (
                 "createObject('tenantId', subscription().tenantId, 'objectId', "
-                f"{identity_reference('replicaWriterIdentityResourceId')}, 'permissions', "
+                f"{selected_principal('replicaWriterIdentityResourceId', 'replicaWriterPrincipalId')}, 'permissions', "
                 "createObject('secrets', createArray('get', 'list', 'set')))"
             )
             vault = next(resource for resource in nested["resources"] if resource["type"] == "Microsoft.KeyVault/vaults")
@@ -336,7 +398,10 @@ class InfrastructureTests(unittest.TestCase):
     def test_service_bus_receiver_uses_official_role_at_queue_scope(self):
         receivers = [
             assignment for assignment in of_type("Microsoft.Authorization/roleAssignments")
-            if assignment["name"] == "[guid(resourceId('Microsoft.ServiceBus/namespaces/queues', format('sb-{0}', parameters('prefix')), 'kv-events'), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', format('id-{0}-worker', parameters('prefix'))), 'receiver')]"
+            if assignment["name"] == (
+                "[guid(resourceId('Microsoft.ServiceBus/namespaces/queues', format('sb-{0}', parameters('prefix')), "
+                f"'kv-events'), {identity_id('workerIdentityResourceId')}, 'receiver')]"
+            )
         ]
         self.assertEqual(len(receivers), 2)
         for assignment in receivers:
@@ -385,7 +450,7 @@ class InfrastructureTests(unittest.TestCase):
 
     def test_existing_vaults_are_references_not_deployed_resources(self):
         for vault in of_type("Microsoft.KeyVault/vaults"):
-            self.assertEqual(vault["condition"], "[empty(parameters('existingVaultResourceId'))]")
+            self.assertEqual(vault["condition"], "[and(parameters('managePermissions'), empty(parameters('existingVaultResourceId')))]")
         foundations = [
             resource for resource in TEMPLATE["resources"]
             if resource["type"] == "Microsoft.Resources/deployments" and resource["name"].endswith("-foundation")
@@ -399,7 +464,7 @@ class InfrastructureTests(unittest.TestCase):
             )
             for diagnostics in foundation["properties"]["template"]["resources"]:
                 if diagnostics["type"] == "Microsoft.Insights/diagnosticSettings" and "Microsoft.KeyVault/vaults" in diagnostics.get("scope", ""):
-                    self.assertEqual(diagnostics["condition"], "[empty(parameters('existingVaultResourceId'))]")
+                    self.assertEqual(diagnostics["condition"], "[and(parameters('managePermissions'), empty(parameters('existingVaultResourceId')))]")
         for primary_id, secondary_id, expected_creates in [
             ("", "", 2), ("/existing-primary", "", 1),
             ("", "/existing-secondary", 1), ("/existing-primary", "/existing-secondary", 0),
@@ -411,7 +476,7 @@ class InfrastructureTests(unittest.TestCase):
                     if resource["type"] != "Microsoft.KeyVault/vaults":
                         continue
                     condition = resource["condition"]
-                    self.assertRegex(condition, r"^\[empty\(parameters\('existingVaultResourceId'\)\)\]$")
+                    self.assertEqual(condition, "[and(parameters('managePermissions'), empty(parameters('existingVaultResourceId')))]")
                     creates += not bool(selected_id)
             self.assertEqual(creates, expected_creates)
         for deployment in TEMPLATE["resources"]:
@@ -421,7 +486,7 @@ class InfrastructureTests(unittest.TestCase):
 
     def test_existing_topics_are_not_recreated_or_reconfigured(self):
         for topic in of_type("Microsoft.EventGrid/systemTopics"):
-            self.assertEqual(topic["condition"], "[empty(parameters('existingSystemTopicResourceId'))]")
+            self.assertEqual(topic["condition"], "[and(parameters('managePermissions'), empty(parameters('existingSystemTopicResourceId')))]")
         routes = [
             resource for resource in TEMPLATE["resources"]
             if resource["type"] == "Microsoft.Resources/deployments" and resource["name"].endswith("-routing")

@@ -37,12 +37,22 @@ storage (3-24 lowercase letters/numbers), app (2-60), and namespace (6-50) rules
 Complete the subscription/permission/quota/connectivity preflight in
 [the Bicep guide](deployment-bicep.md#1-prerequisites-and-preflight); it applies
 equally to manual deployment.
+For Contributor-only operators, an administrator performs identity creation and
+all IAM/policy-grant steps below. Use the
+[administrator/operator permission matrix](deployment-contributor.md) and reuse
+the prepared identities/vaults/topics; Contributor does not administer RBAC.
 
 ## 2. Create resource groups, identities, and networks
 
 In Resource groups, create one group in each location. In Managed Identities,
-create a user-assigned identity in each regional group. Record its resource ID,
+create a user-assigned identity in each regional group, or select two distinct
+precreated identities in the same subscription/tenant. Their names/groups need
+not match the worksheet. A Contributor-only operator reuses the administrator's
+identities rather than creating them. Record each resource ID,
 principal ID, and client ID; do not confuse these three identifiers.
+Use the actual existing identity ARM ID when attaching it to the Function or
+supplying the Portal ARM fallback. Identity attachment still requires read and
+assign/action at its scope, normally included in Contributor at that scope.
 
 Create VNets and subnets:
 
