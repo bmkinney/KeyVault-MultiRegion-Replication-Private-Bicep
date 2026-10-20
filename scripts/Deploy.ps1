@@ -24,6 +24,17 @@ $WhatIfFile = [System.IO.Path]::GetTempFileName()
 try {
     & az bicep build-params --file $ParametersFile --outfile $CompiledParameters --only-show-errors
     if ($LASTEXITCODE -ne 0) { throw 'Parameter compilation failed; no deployment attempted.' }
+    $UserParameters = Get-Content -LiteralPath $CompiledParameters -Raw | ConvertFrom-Json
+    if ($UserParameters.parameters.provisioningIdentityResourceId.value) {
+        $DelegatedArguments = @(
+            "$PSScriptRoot\deploy_delegated.py", '--parameters', $CompiledParameters,
+            '--subscription', $SubscriptionId, '--location', $DeploymentLocation
+        )
+        if ($Apply) { $DelegatedArguments += '--apply' }
+        & python @DelegatedArguments
+        if ($LASTEXITCODE -ne 0) { throw 'Delegated deployment failed or partially completed. Review stage results before retrying.' }
+        return
+    }
     & python "$PSScriptRoot\check_vault_integration.py" --parameters $CompiledParameters `
         --subscription $SubscriptionId --output-parameters $PreparedParameters
     if ($LASTEXITCODE -ne 0) { throw 'Vault integration preflight failed; no deployment attempted.' }

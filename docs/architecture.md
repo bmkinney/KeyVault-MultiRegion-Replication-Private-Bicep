@@ -155,6 +155,14 @@ deploy the remaining infrastructure without role definitions/assignments or
 vault policy writes. Identity attachment and ordinary deployment permissions
 still apply. Event Grid continues using separate system-topic system identities.
 
+An optional [delegated provisioning path](deployment-delegated.md) instead runs
+identity/principal-bearing bootstrap and scoped grant templates inside keyless
+short-lived ACI jobs using a third, administrator-precreated provisioning UAMI.
+Ordinary infrastructure remains under the Contributor caller. Each phase is
+previewed directly and task completion is independently confirmed; container
+creation is not deployment completion. This management-plane path does not alter
+the replication data flow or attach the provisioning identity to the Functions.
+
 Deployment modules exchange deterministic ARM IDs instead of runtime module
 outputs. The runner discovers existing-vault model/tenant/URI before preview and
 preserves prior vault role-assignment names through read-only IAM inventory when

@@ -41,6 +41,11 @@ For Contributor-only operators, an administrator performs identity creation and
 all IAM/policy-grant steps below. Use the
 [administrator/operator permission matrix](deployment-contributor.md) and reuse
 the prepared identities/vaults/topics; Contributor does not administer RBAC.
+The alternative [delegated provisioning workflow](deployment-delegated.md)
+launches keyless ACI jobs using a precreated privileged identity. It uses the
+documented Bicep/PowerShell orchestrator for staged previews and completion
+checks; uploading the Function-only Portal fallback does not perform that handoff.
+For this manual Portal path, administrator grant steps remain explicit.
 
 ## 2. Create resource groups, identities, and networks
 

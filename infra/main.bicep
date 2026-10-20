@@ -26,6 +26,26 @@ param secondaryWorkerIdentityResourceId string = ''
 @description('Create role definitions, assignments, and vault policies. False leaves IAM to administrators and requires existing workers, vaults, and system topics.')
 param managePermissions bool = true
 
+@description('Precreated provisioning UAMI for keyless delegated bootstrap/IAM via Deploy.ps1. Empty retains the selected existing workflow.')
+param provisioningIdentityResourceId string = ''
+
+@description('Existing execution resource group for delegated keyless provisioning jobs.')
+param provisioningResourceGroupName string = ''
+
+@description('ACI execution region; management-plane execution only, no private vault access.')
+param provisioningLocation string = 'eastus'
+
+@description('Maximum time to wait for each delegated job, including Azure deployment operations.')
+@minValue(120)
+@maxValue(7200)
+param provisioningTimeoutSeconds int = 1800
+
+@description('Administrator-predefined restricted replica-writer role ARM ID. Required in delegated mode when either vault uses RBAC.')
+param replicaWriterRoleResourceId string = ''
+
+@description('Internal ownership flags refreshed by delegated orchestration for solution-created parent diagnostics.')
+param resolvedOwnedFoundationDiagnostics object = {}
+
 @description('Internal existing-worker identity metadata populated by Deploy.ps1; do not supply principal/client IDs manually.')
 param resolvedWorkerIdentities object = {}
 
@@ -209,6 +229,8 @@ module primary './modules/foundation.bicep' = {
     existingVaultResourceId: primaryVaultResourceId
     vaultAuthorizationModel: primaryVaultAuthorizationModel
     managePermissions: managePermissions
+    configureOwnedVaultDiagnostics: resolvedOwnedFoundationDiagnostics.?primary.?vault ?? false
+    configureOwnedTopicDiagnostics: resolvedOwnedFoundationDiagnostics.?primary.?topic ?? false
     workerIdentityResourceId: stamps[0].identityId
     workerPrincipalId: stamps[0].principalId
     replicaWriterPrincipalId: stamps[1].principalId
@@ -232,6 +254,8 @@ module secondary './modules/foundation.bicep' = {
     existingVaultResourceId: secondaryVaultResourceId
     vaultAuthorizationModel: secondaryVaultAuthorizationModel
     managePermissions: managePermissions
+    configureOwnedVaultDiagnostics: resolvedOwnedFoundationDiagnostics.?secondary.?vault ?? false
+    configureOwnedTopicDiagnostics: resolvedOwnedFoundationDiagnostics.?secondary.?topic ?? false
     workerIdentityResourceId: stamps[1].identityId
     workerPrincipalId: stamps[1].principalId
     replicaWriterPrincipalId: stamps[0].principalId
@@ -242,7 +266,7 @@ module secondary './modules/foundation.bicep' = {
   dependsOn: [primaryIdentity, secondaryIdentity]
 }
 
-module replicaWriterRole './modules/replica-writer-role.bicep' = if (managePermissions) {
+module replicaWriterRole './modules/replica-writer-role.bicep' = if (managePermissions && empty(replicaWriterRoleResourceId)) {
   name: '${workload}-${token}-replica-writer-role'
   params: {
     workload: workload
@@ -263,7 +287,7 @@ module primaryVaultAccess './modules/vault-access.bicep' = if (managePermissions
     writerIdentityResourceId: stamps[1].identityId
     readerPrincipalId: stamps[0].principalId
     writerPrincipalId: stamps[1].principalId
-    writerRoleId: replicaWriterRoleId
+    writerRoleId: empty(replicaWriterRoleResourceId) ? replicaWriterRoleId : replicaWriterRoleResourceId
     existingRoleAssignmentNames: resolvedVaultRoleAssignments
   }
   dependsOn: [primary, secondaryIdentity, replicaWriterRole]
@@ -281,7 +305,7 @@ module secondaryVaultAccess './modules/vault-access.bicep' = if (managePermissio
     writerIdentityResourceId: stamps[0].identityId
     readerPrincipalId: stamps[1].principalId
     writerPrincipalId: stamps[0].principalId
-    writerRoleId: replicaWriterRoleId
+    writerRoleId: empty(replicaWriterRoleResourceId) ? replicaWriterRoleId : replicaWriterRoleResourceId
     existingRoleAssignmentNames: resolvedVaultRoleAssignments
   }
   dependsOn: [secondary, primaryIdentity, replicaWriterRole]

@@ -10,11 +10,16 @@ ARM as themselves; each Function uses its selected identity at runtime.
 
 ## Choose permission ownership
 
+If the customer wants a supplied identity to **create workers and assign grants**,
+use [delegated provisioning](deployment-delegated.md) instead. This page describes
+the separate workflow where administrators have already prepared runtime grants.
+
 | Parameters | Behavior |
 | --- | --- |
 | `managePermissions = true` (default), worker IDs empty | Create workers and provision the existing template-managed grants |
 | `managePermissions = true`, either/both worker IDs supplied | Reference those workers; create only missing workers; still provision grants and require IAM-write permissions |
 | `managePermissions = false`, both worker IDs supplied | Reference precreated workers, vaults, and system topics; administrators own all grants; no IAM writes |
+| `managePermissions = true`, provisioning identity supplied | [Keyless delegated jobs](deployment-delegated.md) create missing workers and actively apply grants; operator remains Contributor |
 
 External-permissions mode also requires both vault and both system-topic IDs.
 There is no automatic identity creation, topic system-identity enablement,

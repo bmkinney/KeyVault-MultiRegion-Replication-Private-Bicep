@@ -12,6 +12,9 @@ param alertEmail string
 param tags object
 @description('False omits all role assignments and creation of vaults/system-topic identities.')
 param managePermissions bool = true
+@description('Configure diagnostics only for vault/topic parents created by this delegated deployment, never arbitrary reused parents.')
+param configureOwnedVaultDiagnostics bool = false
+param configureOwnedTopicDiagnostics bool = false
 @description('Selected local worker identity ARM ID, including externally managed identity scopes.')
 param workerIdentityResourceId string
 @description('Known principal ID discovered for an existing local worker; empty resolves a newly created worker at deployment.')
@@ -89,53 +92,20 @@ resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' 
   scope: resourceGroup(split(workerIdentityResourceId, '/')[4])
 }
 
-resource replicaWriterIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
-  name: last(split(replicaWriterIdentityResourceId, '/'))
-  scope: resourceGroup(split(replicaWriterIdentityResourceId, '/')[4])
-}
-
-var selectedWorkerPrincipalId = empty(workerPrincipalId) ? identity.properties.principalId : workerPrincipalId
-var selectedWriterPrincipalId = empty(replicaWriterPrincipalId) ? replicaWriterIdentity.properties.principalId : replicaWriterPrincipalId
-var workerPolicies = [
-  {
-    tenantId: subscription().tenantId
-    objectId: selectedWorkerPrincipalId
-    permissions: {
-      secrets: ['get', 'list']
-    }
-  }
-  {
-    tenantId: subscription().tenantId
-    objectId: selectedWriterPrincipalId
-    permissions: {
-      secrets: ['get', 'list', 'set']
-    }
-  }
-]
-
-resource vault 'Microsoft.KeyVault/vaults@2026-02-01' = if (managePermissions && empty(existingVaultResourceId)) {
+resource vault 'Microsoft.KeyVault/vaults@2026-02-01' existing = {
   name: 'kv-${prefix}'
-  location: location
-  tags: tags
-  properties: {
-    tenantId: subscription().tenantId
-    sku: {
-      family: 'A'
-      name: 'standard'
-    }
-    enableRbacAuthorization: vaultAuthorizationModel == 'rbac'
-    accessPolicies: vaultAuthorizationModel == 'rbac' ? [] : workerPolicies
-    enableSoftDelete: true
-    softDeleteRetentionInDays: 90
-    enablePurgeProtection: true
-    enabledForDeployment: false
-    enabledForDiskEncryption: false
-    enabledForTemplateDeployment: false
-    publicNetworkAccess: 'Disabled'
-    networkAcls: {
-      bypass: 'None'
-      defaultAction: 'Deny'
-    }
+}
+module managedVault './managed-vault.bicep' = if (managePermissions && empty(existingVaultResourceId)) {
+  name: 'managed-vault'
+  params: {
+    prefix: prefix
+    location: location
+    tags: tags
+    vaultAuthorizationModel: vaultAuthorizationModel
+    workerIdentityResourceId: workerIdentityResourceId
+    replicaWriterIdentityResourceId: replicaWriterIdentityResourceId
+    workerPrincipalId: workerPrincipalId
+    replicaWriterPrincipalId: replicaWriterPrincipalId
   }
 }
 
@@ -144,8 +114,8 @@ resource referencedVault 'Microsoft.KeyVault/vaults@2026-02-01' existing = if (!
   scope: resourceGroup(empty(existingVaultResourceId) ? resourceGroup().name : split(existingVaultResourceId, '/')[4])
 }
 
-var selectedVaultId = empty(existingVaultResourceId) ? vault!.id : referencedVault!.id
-var selectedVaultUri = empty(existingVaultResourceId) ? vault!.properties.vaultUri : referencedVault!.properties.vaultUri
+var selectedVaultId = empty(existingVaultResourceId) ? vault.id : referencedVault!.id
+var selectedVaultUri = empty(existingVaultResourceId) ? vault.properties.vaultUri : referencedVault!.properties.vaultUri
 
 var accountNames = ['st${storageToken}run', 'st${storageToken}dl']
 resource accounts 'Microsoft.Storage/storageAccounts@2025-06-01' = [for (accountName, index) in accountNames: {
@@ -209,20 +179,6 @@ resource deadletterContainer 'Microsoft.Storage/storageAccounts/blobServices/con
   }
 }
 
-var storageRoles = [
-  'b7e6dc6d-f1e8-4753-8033-0f276bb0955b' // Functions host: Blob Data Owner.
-  '0a9a7e1f-b9d0-4cc4-a60d-0319b160aaa3' // Host diagnostic events: Table Data Contributor.
-]
-resource hostAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = [for role in storageRoles: if (managePermissions) {
-  name: guid(accounts[0].id, identity.id, role)
-  scope: accounts[0]
-  properties: {
-    principalId: selectedWorkerPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', role)
-  }
-}]
-
 resource bus 'Microsoft.ServiceBus/namespaces@2024-01-01' = {
   name: 'sb-${prefix}'
   location: location
@@ -266,27 +222,18 @@ resource queue 'Microsoft.ServiceBus/namespaces/queues@2024-01-01' = {
   }
 }
 
-resource receiver 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (managePermissions) {
-  name: guid(queue.id, identity.id, 'receiver')
-  scope: queue
-  properties: {
-    principalId: selectedWorkerPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4f6d3b9b-027b-4f4c-9142-0e5a2a2247e0')
-  }
-}
-
-resource topic 'Microsoft.EventGrid/systemTopics@2025-02-15' = if (managePermissions && empty(existingSystemTopicResourceId)) {
+resource topic 'Microsoft.EventGrid/systemTopics@2025-02-15' existing = {
   name: 'evgt-${prefix}'
-  location: location
-  tags: tags
-  identity: {
-    type: 'SystemAssigned'
+}
+module managedTopic './managed-topic.bicep' = if (managePermissions && empty(existingSystemTopicResourceId)) {
+  name: 'managed-topic'
+  params: {
+    prefix: prefix
+    location: location
+    tags: tags
+    vaultResourceId: selectedVaultId
   }
-  properties: {
-    source: selectedVaultId
-    topicType: 'Microsoft.KeyVault.vaults'
-  }
+  dependsOn: [managedVault]
 }
 
 resource referencedTopic 'Microsoft.EventGrid/systemTopics@2025-02-15' existing = if (!empty(existingSystemTopicResourceId)) {
@@ -294,28 +241,7 @@ resource referencedTopic 'Microsoft.EventGrid/systemTopics@2025-02-15' existing 
   scope: resourceGroup(empty(existingSystemTopicResourceId) ? resourceGroup().name : split(existingSystemTopicResourceId, '/')[4])
 }
 
-var selectedTopicId = empty(existingSystemTopicResourceId) ? topic!.id : referencedTopic!.id
-var selectedTopicPrincipal = empty(existingSystemTopicResourceId) ? topic!.identity.principalId : referencedTopic!.identity.principalId
-
-resource sender 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (managePermissions) {
-  name: guid(bus.id, selectedTopicId, 'sender')
-  scope: bus
-  properties: {
-    principalId: selectedTopicPrincipal
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '69a216fc-b8fb-44d8-bc22-1f3c2cd27a39')
-  }
-}
-
-resource deadletterWriter 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (managePermissions) {
-  name: guid(accounts[1].id, selectedTopicId, 'blob-writer')
-  scope: accounts[1]
-  properties: {
-    principalId: selectedTopicPrincipal
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'ba92f5b4-2d11-453d-a403-e96b0029c9fe')
-  }
-}
+var selectedTopicId = empty(existingSystemTopicResourceId) ? topic.id : referencedTopic!.id
 
 resource workspace 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
   name: 'log-${prefix}'
@@ -348,14 +274,16 @@ resource insights 'Microsoft.Insights/components@2020-02-02' = {
   }
 }
 
-resource telemetryAccess 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (managePermissions) {
-  name: guid(insights.id, identity.id, 'metrics-publisher')
-  scope: insights
-  properties: {
-    principalId: selectedWorkerPrincipalId
-    principalType: 'ServicePrincipal'
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '3913510d-42f4-4e42-8a64-420c390055eb')
+module services './service-access.bicep' = if (managePermissions) {
+  name: 'service-access'
+  params: {
+    prefix: prefix
+    storageToken: storageToken
+    workerIdentityResourceId: workerIdentityResourceId
+    workerPrincipalId: workerPrincipalId
+    systemTopicResourceId: selectedTopicId
   }
+  dependsOn: [accounts, queue, managedTopic, insights]
 }
 
 resource monitor 'Microsoft.Insights/privateLinkScopes@2023-06-01-preview' = {
@@ -465,9 +393,10 @@ resource eventFailureAlert 'Microsoft.Insights/metricAlerts@2018-03-01' = {
     }
     actions: [{ actionGroupId: actionGroup.id }]
   }
+  dependsOn: [managedTopic]
 }
 
-resource vaultDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (managePermissions && empty(existingVaultResourceId)) {
+resource vaultDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if ((managePermissions && empty(existingVaultResourceId)) || configureOwnedVaultDiagnostics) {
   name: 'workspace'
   scope: vault
   properties: {
@@ -475,6 +404,7 @@ resource vaultDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-prev
     logs: [{ categoryGroup: 'allLogs', enabled: true }]
     metrics: [{ category: 'AllMetrics', enabled: true }]
   }
+  dependsOn: [managedVault]
 }
 
 resource busDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
@@ -487,13 +417,14 @@ resource busDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-previe
   }
 }
 
-resource topicDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if (managePermissions && empty(existingSystemTopicResourceId)) {
+resource topicDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = if ((managePermissions && empty(existingSystemTopicResourceId)) || configureOwnedTopicDiagnostics) {
   name: 'workspace'
   scope: topic
   properties: {
     workspaceId: workspace.id
     logs: [{ categoryGroup: 'allLogs', enabled: true }]
   }
+  dependsOn: [managedTopic]
 }
 
 resource blobDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = [for (accountName, index) in accountNames: {
@@ -507,7 +438,7 @@ resource blobDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-previ
 }]
 
 output vaultId string = selectedVaultId
-output vaultName string = empty(existingVaultResourceId) ? vault!.name : referencedVault!.name
+output vaultName string = empty(existingVaultResourceId) ? vault.name : referencedVault!.name
 output vaultUri string = selectedVaultUri
 output vaultResourceGroup string = empty(existingVaultResourceId) ? resourceGroup().name : split(existingVaultResourceId, '/')[4]
 output vaultUsesRbac bool = empty(existingVaultResourceId) ? vaultAuthorizationModel == 'rbac' : (referencedVault!.properties.?enableRbacAuthorization ?? false)

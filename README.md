@@ -27,6 +27,9 @@ The same notice is available in [DISCLAIMER.md](DISCLAIMER.md).
   same infrastructure and identity configuration without Bicep.
 - [Contributor-only deployment](docs/deployment-contributor.md): reuse precreated
   worker identities and administrator-provisioned permissions, without IAM writes.
+- [Delegated provisioning](docs/deployment-delegated.md): a Contributor supplies
+  one precreated provisioning identity; keyless container jobs create workers
+  and apply grants under that identity.
 - [Architecture and limitations](docs/architecture.md).
 - [Use existing Key Vaults](docs/existing-vaults.md): independent new/existing selection,
   source filters, preserved vault settings, and protected destination collisions.
@@ -65,13 +68,19 @@ replication. Activation is an explicit deployment/configuration step.
 
 Copy the appropriate example to `infra\parameters\deployment.local.bicepparam`
 and edit only that file. Use `scripts\Deploy.ps1 -ParametersFile` with Azure CLI
-2.75.0 or newer. Worker identities are created by default; supply
+2.75.0 or newer (2.76.0+ for delegated provisioning). Worker identities are created by default; supply
 `primaryWorkerIdentityResourceId` and/or `secondaryWorkerIdentityResourceId`
 to reuse existing identities. Do not supply principal/client IDs or edit Bicep
 wiring. For Contributor-only operators, start with
 `infra\parameters\contributor.example.bicepparam` and set `managePermissions = false`.
 Administrators must first prepare both identities, vaults, system topics, and
 their runtime grants; this mode does not create or change IAM permissions.
+For active identity/grant creation by a separate provisioning identity, instead
+start with `infra\parameters\delegated.example.bicepparam`, keep
+`managePermissions = true`, and supply `provisioningIdentityResourceId` plus the
+execution RG. Administrators must pregrant its scoped authority. The supported
+runner stages actual Bicep previews and waits for verified job completion; a
+first-run preview explicitly defers stages whose prerequisites do not yet exist.
 The runner discovers existing-vault/identity metadata and, in managed-permissions
 mode, prior vault role-assignment names into temporary parameters,
 then uses the same parameters for validation, preview, and an explicitly

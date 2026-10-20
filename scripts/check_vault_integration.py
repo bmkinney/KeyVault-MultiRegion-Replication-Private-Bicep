@@ -25,7 +25,7 @@ def authorization_model(properties):
     return "rbac" if enabled is True else "accessPolicy"
 
 
-def azure_json(*arguments):
+def azure_text(*arguments, timeout=120):
     # Windows Azure CLI is a .cmd launcher; reject shell metacharacters before invocation.
     if any(re.search(r'[&|<>^%!"()\r\n]', argument) for argument in arguments):
         raise ValueError("Azure resource identifiers must not contain shell metacharacters")
@@ -34,11 +34,15 @@ def azure_json(*arguments):
         raise RuntimeError("Azure CLI executable is not available on PATH")
     result = subprocess.run(
         [executable, *arguments, "--output", "json", "--only-show-errors"],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True, text=True, timeout=timeout,
     )
     if result.returncode:
-        raise RuntimeError(f"Read-only Azure query failed ({arguments[0]} {arguments[1]}): {result.stderr.strip()}")
-    return json.loads(result.stdout)
+        raise RuntimeError(f"Azure CLI command failed ({arguments[0]} {arguments[1]}): {result.stderr.strip()}")
+    return result.stdout
+
+
+def azure_json(*arguments, timeout=120):
+    return json.loads(azure_text(*arguments, timeout=timeout))
 
 
 def validate_id(resource_id, subscription, kind):
@@ -211,7 +215,7 @@ def preflight_workers(parameters, subscription, vaults, query):
     return resolved
 
 
-def existing_role_assignment_names(workload, subscription, query, known_identities=None):
+def existing_role_assignment_names(workload, subscription, query, known_identities=None, vault_scopes=None):
     known_identities = known_identities or {}
     identities = query("identity", "list", "--subscription", subscription) if len(known_identities) < 2 else []
     owned = {metadata["principalId"].lower(): identity_id for identity_id, metadata in known_identities.items()}
@@ -230,10 +234,13 @@ def existing_role_assignment_names(workload, subscription, query, known_identiti
         owned[principal_id.lower()] = identity["id"]
     if not owned:
         return {}
-    assignments = query(
-        "role", "assignment", "list", "--subscription", subscription, "--all",
-        "--fill-principal-name", "false", "--fill-role-definition-name", "false",
-    )
+    assignments = []
+    for scope in vault_scopes or [None]:
+        assignments.extend(query(
+            "role", "assignment", "list", "--subscription", subscription,
+            *(("--scope", scope) if scope else ("--all",)),
+            "--fill-principal-name", "false", "--fill-role-definition-name", "false",
+        ))
     names = {}
     for assignment in assignments:
         identity_id = owned.get(assignment.get("principalId", "").lower())
@@ -265,8 +272,9 @@ def prepare_parameters(document, subscription, query=azure_json):
     parameters["resolvedExistingVaults"] = {"value": resolved}
     parameters["resolvedVaultRoleAssignments"] = {"value": assignments}
     parameters["resolvedWorkerIdentities"] = {"value": workers}
+    parameters["resolvedOwnedFoundationDiagnostics"] = {"value": {}}
     if not parameters.get("managePermissions", {}).get("value", True):
-        print("External-permissions mode: IAM writes and role-assignment inventory are disabled. Administrator grants and data-plane readiness must be verified separately.")
+        print("This infrastructure stage omits IAM writes and role-assignment inventory. Effective runtime access must be verified separately.")
     return prepared
 
 

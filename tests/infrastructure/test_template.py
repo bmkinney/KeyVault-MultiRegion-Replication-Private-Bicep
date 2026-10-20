@@ -29,6 +29,11 @@ def deployment(name):
                 if resource["type"] == "Microsoft.Resources/deployments" and resource["name"] == name)
 
 
+def foundation_module(side, name):
+    return next(item for item in deployment(f"{side}-foundation")["properties"]["template"]["resources"]
+                if item["type"] == "Microsoft.Resources/deployments" and item["name"] == name)
+
+
 def module_id(side, name):
     return (
         "extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', "
@@ -244,7 +249,11 @@ class InfrastructureTests(unittest.TestCase):
                 parameters["writerIdentityResourceId"]["value"],
                 f"[variables('stamps')[{1 - index}].identityId]",
             )
-            self.assertEqual(parameters["writerRoleId"]["value"], "[variables('replicaWriterRoleId')]")
+            self.assertEqual(
+                parameters["writerRoleId"],
+                "[if(empty(parameters('replicaWriterRoleResourceId')), createObject('value', variables('replicaWriterRoleId')), "
+                "createObject('value', parameters('replicaWriterRoleResourceId')))]",
+            )
             self.assertEqual(parameters["existingRoleAssignmentNames"]["value"], "[parameters('resolvedVaultRoleAssignments')]")
 
     def test_access_policies_are_additive_and_exactly_secret_read_or_replica_write(self):
@@ -302,7 +311,14 @@ class InfrastructureTests(unittest.TestCase):
                 properties["parameters"]["replicaWriterIdentityResourceId"]["value"],
                 f"[variables('stamps')[{1 if side == 'primary' else 0}].identityId]",
             )
-            nested = properties["template"]
+            managed_vault = foundation_module(side, "managed-vault")
+            self.assertEqual(managed_vault["condition"],
+                             "[and(parameters('managePermissions'), empty(parameters('existingVaultResourceId')))]")
+            for parameter in ("workerIdentityResourceId", "replicaWriterIdentityResourceId",
+                              "workerPrincipalId", "replicaWriterPrincipalId"):
+                self.assertEqual(managed_vault["properties"]["parameters"][parameter]["value"],
+                                 f"[parameters('{parameter}')]")
+            nested = managed_vault["properties"]["template"]
             reader = (
                 "createObject('tenantId', subscription().tenantId, 'objectId', "
                 f"{selected_principal('workerIdentityResourceId', 'workerPrincipalId')}, "
@@ -449,8 +465,11 @@ class InfrastructureTests(unittest.TestCase):
         self.assertFalse(TEMPLATE["parameters"]["allowUnmanagedOverwrite"]["defaultValue"])
 
     def test_existing_vaults_are_references_not_deployed_resources(self):
-        for vault in of_type("Microsoft.KeyVault/vaults"):
-            self.assertEqual(vault["condition"], "[and(parameters('managePermissions'), empty(parameters('existingVaultResourceId')))]")
+        for side in ("primary", "secondary"):
+            module = foundation_module(side, "managed-vault")
+            self.assertEqual(module["condition"], "[and(parameters('managePermissions'), empty(parameters('existingVaultResourceId')))]")
+            self.assertEqual(len([item for item in module["properties"]["template"]["resources"]
+                                  if item["type"] == "Microsoft.KeyVault/vaults"]), 1)
         foundations = [
             resource for resource in TEMPLATE["resources"]
             if resource["type"] == "Microsoft.Resources/deployments" and resource["name"].endswith("-foundation")
@@ -464,7 +483,11 @@ class InfrastructureTests(unittest.TestCase):
             )
             for diagnostics in foundation["properties"]["template"]["resources"]:
                 if diagnostics["type"] == "Microsoft.Insights/diagnosticSettings" and "Microsoft.KeyVault/vaults" in diagnostics.get("scope", ""):
-                    self.assertEqual(diagnostics["condition"], "[and(parameters('managePermissions'), empty(parameters('existingVaultResourceId')))]")
+                    self.assertEqual(
+                        diagnostics["condition"],
+                        "[or(and(parameters('managePermissions'), empty(parameters('existingVaultResourceId'))), "
+                        "parameters('configureOwnedVaultDiagnostics'))]",
+                    )
         for primary_id, secondary_id, expected_creates in [
             ("", "", 2), ("/existing-primary", "", 1),
             ("", "/existing-secondary", 1), ("/existing-primary", "/existing-secondary", 0),
@@ -473,7 +496,7 @@ class InfrastructureTests(unittest.TestCase):
             for foundation in foundations:
                 selected_id = primary_id if foundation["name"] == "primary-foundation" else secondary_id
                 for resource in foundation["properties"]["template"]["resources"]:
-                    if resource["type"] != "Microsoft.KeyVault/vaults":
+                    if resource["type"] != "Microsoft.Resources/deployments" or resource["name"] != "managed-vault":
                         continue
                     condition = resource["condition"]
                     self.assertEqual(condition, "[and(parameters('managePermissions'), empty(parameters('existingVaultResourceId')))]")
@@ -485,8 +508,11 @@ class InfrastructureTests(unittest.TestCase):
                 self.assertIn(f"split(parameters('{side}VaultResourceId'), '/')", deployment["resourceGroup"])
 
     def test_existing_topics_are_not_recreated_or_reconfigured(self):
-        for topic in of_type("Microsoft.EventGrid/systemTopics"):
-            self.assertEqual(topic["condition"], "[and(parameters('managePermissions'), empty(parameters('existingSystemTopicResourceId')))]")
+        for side in ("primary", "secondary"):
+            self.assertEqual(
+                foundation_module(side, "managed-topic")["condition"],
+                "[and(parameters('managePermissions'), empty(parameters('existingSystemTopicResourceId')))]",
+            )
         routes = [
             resource for resource in TEMPLATE["resources"]
             if resource["type"] == "Microsoft.Resources/deployments" and resource["name"].endswith("-routing")
