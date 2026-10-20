@@ -52,6 +52,10 @@ certify this custom application's behavior. Local and live tests are separate.
 | Contributor manages resources but excludes IAM writes | [Contributor](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/privileged#contributor) |
 | Read/attach an existing user-assigned identity without creating it | [Managed Identity Operator actions](https://learn.microsoft.com/en-us/azure/role-based-access-control/built-in-roles/identity#managed-identity-operator) |
 | Existing parent-scope grants apply to subsequently created child resources | [RBAC scope/inheritance](https://learn.microsoft.com/en-us/azure/role-based-access-control/scope-overview) |
+| User-assigned identity execution in keyless provisioning containers | [ACI managed identity](https://learn.microsoft.com/en-us/azure/container-instances/container-instances-managed-identity) |
+| Task termination, exit codes, and possible retries despite Never on nonzero failures | [ACI restart policies](https://learn.microsoft.com/en-us/azure/container-instances/container-instances-restart-policy) |
+| Identity-attachment access delegates its effective permissions to operator-controlled code | [Managed-identity security guidance](https://learn.microsoft.com/en-us/entra/identity/managed-identities-azure-resources/managed-identity-best-practice-recommendations) |
+| DeploymentScripts storage requires shared keys; not used by delegated provisioning | [DeploymentScripts storage](https://learn.microsoft.com/en-us/azure/azure-resource-manager/templates/deployment-script-template#use-existing-storage-account) |
 | Resource name constraints | [Name rules](https://learn.microsoft.com/en-us/azure/azure-resource-manager/management/resource-name-rules) |
 
 ## Well-Architected review

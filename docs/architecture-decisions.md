@@ -20,6 +20,7 @@ Approved through interactive clarification on 2026-10-09.
 | Destination collisions | Reject unmanaged names unless replacement is explicitly approved | Preserve existing unrelated contents |
 | What-if wiring (subsequent customer decision) | Static module inputs, automatic read-only discovery, and a fail-closed complete-preview gate | Users edit only parameters; runtime module outputs must not hide downstream deployments |
 | Existing worker identities / Contributor operators (subsequent customer decision) | Optional existing UAMI IDs; external-permissions mode references prepared workers/vaults/topics and omits all IAM writes | Administrator-owned runtime grants without elevating deployment operators; default managed-permissions path retained |
+| Delegated provisioning (subsequent customer decision) | Contributor-triggered keyless ACI jobs use a supplied precreated provisioning UAMI for worker/principal-bearing bootstrap and scoped grants; ordinary infrastructure stays under Contributor | Active creation without user IAM-administrator roles, explicit staged previews/completion, no shared-key staging; identity attachment is privileged delegation rather than trigger-only isolation |
 
 ## Implementation refinements
 

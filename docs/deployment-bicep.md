@@ -34,6 +34,12 @@ Select a subscription and check:
   and `infra\parameters\contributor.example.bicepparam`. Administrators prepare
   identities/resources/grants separately; `managePermissions = false` omits all
   role definitions, role assignments, and vault policy updates.
+- If an administrator instead supplies a provisioning identity to create workers
+  and grants, use [delegated provisioning](deployment-delegated.md) and its
+  parameter example. The operator remains Contributor; keyless ACI jobs execute
+  the privileged templates with that identity. This mode needs CLI 2.76.0+,
+  Microsoft.ContainerInstance, approved execution capacity, and administrator-scoped
+  permissions prepared in advance.
 - Nonoverlapping CIDRs with the deployment network.
 - Global name availability for vault, storage, namespace, and app names.
 - Operator private access to both monitoring DNS views. Do not merge two AMPLS
@@ -65,6 +71,12 @@ An empty ID still creates that worker when `managePermissions = true`.
 Both regional workers must use distinct identities. Reuse alone does not remove
 the caller's IAM-write requirements; use `managePermissions = false` and its
 administrator prerequisites for that.
+Alternatively, set `provisioningIdentityResourceId` and
+`provisioningResourceGroupName` in the delegated example to actively provision
+identities/grants through the precreated identity. Keep `managePermissions = true`
+in that user file; the runner separates privileged and ordinary phases internally.
+Do not combine delegated and external-permissions mode or deploy `main.bicep`
+directly expecting its parameters to switch the ARM caller.
 Set a real `alertEmail` before operational use. Do not commit personal recipients
 if your organization treats them as private information.
 

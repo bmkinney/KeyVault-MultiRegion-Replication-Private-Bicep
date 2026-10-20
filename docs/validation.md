@@ -255,3 +255,61 @@ grant propagation, private endpoint approvals, worker startup/activation, and
 Portal walkthrough **PENDING**. No Azure resource was queried or changed for
 this implementation. Metadata preflight does not prove effective data-plane
 access; administrator preparation remains a required separate action.
+
+## Contributor-triggered delegated provisioning (2026-10-20)
+
+Added parameter-selected, keyless ACI execution using an administrator-precreated
+provisioning UAMI. The Contributor caller deploys ordinary infrastructure; the
+UAMI creates missing workers and owned vault/topic parents and applies runtime
+grants. Managed vault/topic/service-access definitions are shared with the
+original managed-permissions path, not independently reimplemented. Default
+vault authorization and runtime replication behavior are unchanged.
+
+| Check | Actual result |
+| --- | --- |
+| Main, layout/bootstrap/access/job entry points and all four parameter examples | Compilation exit 0, no diagnostics |
+| Full unit suite | **111 passed**, including actual PowerShell parameter routing/failure/temp cleanup and 22 delegated orchestration tests |
+| Main compiled-infrastructure suite | **24 passed**; previous identity/authorization/private-path/no-active-IAM/static-input invariants retained |
+| Delegated compiled-stage suite | **5 passed**; shared bootstrap definitions, scoped grant-only template, task identity, pinned image, secure bounded payload, no ports/volumes, dependency ordering |
+| Actual generated ACI Python command | Syntax compiled and executed locally with Azure CLI calls doubled; selected-UAMI login, full Provider validation/what-if before create, completion marker, embedded helper source, and pre-login digest-tampering rejection |
+| Failure/preview exercises | No-mutation previews and each deferral boundary; scoped role inventory; overbroad/unassignable role rejection; foreign tenant/read-denial/name collision; owned rerun; bootstrap failure; ARM Failed/Canceled/deadlines; container timeout/restart/nonzero/result mismatch; original error preserved if stop fails; activation after authorization only |
+| PowerShell/dependencies/Portal | All scripts parse; `pip check` finds no broken requirements; Portal Function artifact remains identical to source compilation |
+| Plan/documentation/hygiene | JSON and local documentation file links valid; no customer environment identifiers/private-key markers in changed/new files; local parameters remain Git-ignored; `git diff --check` exit 0 |
+| Unsuppressed Checkov 3.3.22 across main and all four delegated stages | **64 passed, 14 failed, 0 skipped, 0 parsing errors; exit 1** |
+
+The scanner remains **not clean**. All failures are in main and are the same
+seven previously dispositioned rule IDs, each reported twice. The additional
+passes do not prove that expression-limited scanning evaluated every delegated
+branch. No findings were suppressed and no automated severity clearance is
+claimed.
+
+The first generated container command exposed a Bicep raw-multiline-string
+interpolation error despite successful template compilation. That command was
+corrected and is now checked through its **compiled ARM representation and local
+execution**, not just source inspection or a simulated successful ACI resource.
+ProviderNoRbac is limited to the caller's privileged-template previews; the
+actual task explicitly requests full Provider validation using its own identity.
+Long deployment previews use the configured timeout rather than the shorter
+metadata-read timeout.
+
+To reproduce the added compiled-stage checks after compiling main:
+
+```powershell
+foreach ($stage in @('provisioning-layout', 'provision-vault-topic', 'provision-access')) {
+    az bicep build --file ".\infra\$stage.bicep" --outfile ".\.build\$stage.json"
+}
+az bicep build --file .\infra\modules\provisioning-job.bicep `
+  --outfile .\.build\modules-provisioning-job.json
+az bicep build-params --file .\infra\parameters\delegated.example.bicepparam `
+  --outfile .\.build\delegated.parameters.json
+.\.venv\Scripts\python.exe .\tests\infrastructure\test_provisioning_template.py .\.build -v
+```
+
+Completion self-check: local compilation/regressions **PASS**; generated
+entrypoint execution and privilege-boundary assertions **PASS**; Checkov
+**REVIEWED, NOT CLEAN**; live Contributor/UAMI scope checks, policy/quota/image
+pull, ACI managed-identity startup, complete provider previews, grant propagation,
+private acceptance and recovery **PENDING**. No tenant resources were queried,
+created, changed, or deployed during this implementation. Neither local doubles
+nor compilation proves an end-to-end Azure deployment. No production suitability
+or enforced trigger-only separation of duties is claimed.

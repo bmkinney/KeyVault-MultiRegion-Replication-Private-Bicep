@@ -40,6 +40,10 @@ function az {
 function python {
     Record-Call 'python' $args
     $global:LASTEXITCODE = 0
+    if ($args[0] -like '*deploy_delegated.py') {
+        if ($env:TEST_FAILURE -eq 'delegated') { $global:LASTEXITCODE = 1 }
+        return
+    }
     if ($env:TEST_FAILURE -eq 'preflight') { $global:LASTEXITCODE = 1; return }
     $index = [array]::IndexOf($args, '--output-parameters')
     if ($index -lt 0) { throw 'Runner did not request prepared parameters' }
@@ -61,7 +65,7 @@ try {
 
 @unittest.skipUnless(shutil.which("pwsh"), "PowerShell 7 is required for deployment runner tests")
 class DeploymentRunnerTests(unittest.TestCase):
-    def run_preview(self, preview, *, apply=True, failure="", version="2.91.0"):
+    def run_preview(self, preview, *, apply=True, failure="", version="2.91.0", delegated=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             temp = root / "temporary"
@@ -69,7 +73,10 @@ class DeploymentRunnerTests(unittest.TestCase):
             wrapper, parameters, result = root / "wrapper.ps1", root / "parameters.json", root / "preview.json"
             log, created = root / "calls.jsonl", root / "created"
             wrapper.write_text(WRAPPER, encoding="utf-8")
-            parameters.write_text(json.dumps({"parameters": {"workload": {"value": "mrkv"}}}), encoding="utf-8")
+            values = {"workload": {"value": "mrkv"}}
+            if delegated:
+                values["provisioningIdentityResourceId"] = {"value": "synthetic-provisioner"}
+            parameters.write_text(json.dumps({"parameters": values}), encoding="utf-8")
             result.write_text(preview if isinstance(preview, str) else json.dumps(preview), encoding="utf-8")
             env = {
                 **os.environ, "TEMP": str(temp), "TMP": str(temp), "TMPDIR": str(temp),
@@ -116,6 +123,20 @@ class DeploymentRunnerTests(unittest.TestCase):
         result, _, created = self.run_preview({"status": "Succeeded", "changes": []}, apply=False)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertFalse(created)
+
+    def test_supplied_provisioner_routes_only_to_delegated_orchestration(self):
+        for apply in (False, True):
+            result, calls, created = self.run_preview({}, apply=apply, delegated=True)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertFalse(created)
+            python = [call for call in calls if call["tool"] == "python"]
+            self.assertEqual(len(python), 1)
+            self.assertTrue(python[0]["arguments"][0].endswith("deploy_delegated.py"))
+            self.assertEqual("--apply" in python[0]["arguments"], apply)
+            self.assertFalse(any(call["arguments"][:1] == ["deployment"] for call in calls))
+        result, _, _ = self.run_preview({}, delegated=True, failure="delegated")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("partially completed", result.stdout)
 
     def test_incomplete_and_invalid_previews_never_create(self):
         valid = {"status": "Succeeded", "changes": [CHANGE]}
