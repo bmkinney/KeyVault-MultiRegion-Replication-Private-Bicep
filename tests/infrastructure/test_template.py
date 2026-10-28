@@ -49,7 +49,7 @@ def module_reference(side, name):
 def identity_id(parameter):
     return (
         "extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', "
-        f"subscription().subscriptionId, split(parameters('{parameter}'), '/')[4]), "
+        f"split(parameters('{parameter}'), '/')[2], split(parameters('{parameter}'), '/')[4]), "
         f"'Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('{parameter}'), '/')))"
     )
 
@@ -410,6 +410,11 @@ class InfrastructureTests(unittest.TestCase):
             self.assertNotIn("AzureWebJobsStorage", names)
             self.assertNotIn("WEBSITE_RUN_FROM_PACKAGE", names)
             self.assertNotIn("WEBSITE_CONTENTAZUREFILECONNECTIONSTRING", names)
+            settings = {setting["name"]: setting["value"] for setting in props["siteConfig"]["appSettings"]}
+            for name in ("AzureWebJobsStorage__clientId", "ServiceBusConnection__clientId",
+                         "APPLICATIONINSIGHTS_AUTHENTICATION_STRING", "WORKER_CLIENT_ID"):
+                self.assertIn("split(parameters('foundation').identityId, '/')[2]", settings[name])
+                self.assertNotIn("subscription().subscriptionId", settings[name])
 
     def test_service_bus_receiver_uses_official_role_at_queue_scope(self):
         receivers = [

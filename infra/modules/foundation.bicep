@@ -89,7 +89,7 @@ resource links 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
   name: last(split(workerIdentityResourceId, '/'))
-  scope: resourceGroup(split(workerIdentityResourceId, '/')[4])
+  scope: resourceGroup(split(workerIdentityResourceId, '/')[2], split(workerIdentityResourceId, '/')[4])
 }
 
 resource vault 'Microsoft.KeyVault/vaults@2026-02-01' existing = {

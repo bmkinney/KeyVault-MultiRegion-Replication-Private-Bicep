@@ -10,11 +10,11 @@ param replicaWriterPrincipalId string = ''
 
 resource reader 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
   name: last(split(workerIdentityResourceId, '/'))
-  scope: resourceGroup(split(workerIdentityResourceId, '/')[4])
+  scope: resourceGroup(split(workerIdentityResourceId, '/')[2], split(workerIdentityResourceId, '/')[4])
 }
 resource writer 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
   name: last(split(replicaWriterIdentityResourceId, '/'))
-  scope: resourceGroup(split(replicaWriterIdentityResourceId, '/')[4])
+  scope: resourceGroup(split(replicaWriterIdentityResourceId, '/')[2], split(replicaWriterIdentityResourceId, '/')[4])
 }
 
 resource vault 'Microsoft.KeyVault/vaults@2026-02-01' = {

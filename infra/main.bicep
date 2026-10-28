@@ -17,16 +17,16 @@ param primaryVaultResourceId string = ''
 @description('Existing secondary vault ARM ID in this subscription; empty creates a vault.')
 param secondaryVaultResourceId string = ''
 
-@description('Existing primary worker user-assigned identity ARM ID in this subscription; empty creates one in managed-permissions mode.')
+@description('Existing primary worker user-assigned identity ARM ID in any subscription in this tenant; empty creates one in managed-permissions mode.')
 param primaryWorkerIdentityResourceId string = ''
 
-@description('Existing secondary worker user-assigned identity ARM ID in this subscription; empty creates one in managed-permissions mode.')
+@description('Existing secondary worker user-assigned identity ARM ID in any subscription in this tenant; empty creates one in managed-permissions mode.')
 param secondaryWorkerIdentityResourceId string = ''
 
 @description('Create role definitions, assignments, and vault policies. False leaves IAM to administrators and requires existing workers, vaults, and system topics.')
 param managePermissions bool = true
 
-@description('Precreated provisioning UAMI for keyless delegated bootstrap/IAM via Deploy.ps1. Empty retains the selected existing workflow.')
+@description('Precreated provisioning UAMI in any subscription in this tenant for keyless delegated bootstrap/IAM via Deploy.ps1. Empty retains the selected existing workflow.')
 param provisioningIdentityResourceId string = ''
 
 @description('Existing execution resource group for delegated keyless provisioning jobs.')

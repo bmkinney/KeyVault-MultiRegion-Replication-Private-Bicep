@@ -65,8 +65,10 @@ Copy the appropriate example to `infra\parameters\deployment.local.bicepparam`
 (Git-ignored) and edit that file only. Do not change Bicep files or supply worker
 principal/client IDs. By default the template creates both worker identities.
 Set either `primaryWorkerIdentityResourceId` or `secondaryWorkerIdentityResourceId`
-to reuse a same-subscription, same-tenant user-assigned identity, including one in
-another resource group. The runner discovers its principal/client IDs read-only.
+to reuse a same-tenant user-assigned identity, including one in another subscription
+or resource group. The runner discovers its principal/client IDs read-only in the
+identity's subscription. The caller needs identity read/assign at that scope;
+Contributor in the deployment subscription alone does not cover external identities.
 An empty ID still creates that worker when `managePermissions = true`.
 Both regional workers must use distinct identities. Reuse alone does not remove
 the caller's IAM-write requirements; use `managePermissions = false` and its

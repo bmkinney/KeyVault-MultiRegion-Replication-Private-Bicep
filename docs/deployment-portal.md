@@ -51,13 +51,15 @@ For this manual Portal path, administrator grant steps remain explicit.
 
 In Resource groups, create one group in each location. In Managed Identities,
 create a user-assigned identity in each regional group, or select two distinct
-precreated identities in the same subscription/tenant. Their names/groups need
+precreated identities in the same tenant, including other subscriptions. Their names/groups need
 not match the worksheet. A Contributor-only operator reuses the administrator's
 identities rather than creating them. Record each resource ID,
 principal ID, and client ID; do not confuse these three identifiers.
 Use the actual existing identity ARM ID when attaching it to the Function or
 supplying the Portal ARM fallback. Identity attachment still requires read and
 assign/action at its scope, normally included in Contributor at that scope.
+Contributor in the deployment subscription alone does not cover identities in
+other subscriptions; arrange read/assign grants at those identity scopes separately.
 
 Create VNets and subnets:
 

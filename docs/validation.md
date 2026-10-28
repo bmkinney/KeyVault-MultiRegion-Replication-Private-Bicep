@@ -240,7 +240,7 @@ in this mode. The complete-preview gate remains unchanged.
 | Main Bicep and all three parameter examples, including Contributor mode | Compilation exit 0, no diagnostics |
 | Full unit suite | 88 passed, including actual PowerShell runner execution with local command doubles |
 | Compiled-infrastructure suite | 24 passed; selected identities/principals across consumers, recursively guarded IAM/principal creation, transitive static module inputs, and all previous architecture/authorization invariants |
-| Identity preflight cases | All four external vault-model pairs; missing prerequisites before any query; malformed/cross-subscription IDs; missing/invalid/cross-tenant metadata; duplicate identities/principals; identity read failure; fresh snapshots; mixed new/existing workers; arbitrary identity names/groups and retained existing RBAC grant names |
+| Identity preflight cases | All four external vault-model pairs; missing prerequisites before any query; malformed IDs; same-tenant cross-subscription worker/provisioning identities queried in their own subscriptions while deployment scopes remain unchanged; cross-subscription vault rejection; missing/invalid/cross-tenant metadata; duplicate identities/principals; identity read failure; fresh snapshots; mixed new/existing workers; arbitrary identity names/groups and retained existing RBAC grant names |
 | Unsuppressed Checkov 3.3.22 | 59 passed, 14 failed, 0 skipped, 0 parsing errors; exit 1 |
 
 Checkov retains the same seven documented rule IDs and is **not clean**; there

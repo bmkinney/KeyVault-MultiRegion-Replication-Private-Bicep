@@ -28,7 +28,7 @@ param tags object
 
 resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
   name: last(split(foundation.identityId, '/'))
-  scope: resourceGroup(split(foundation.identityId, '/')[4])
+  scope: resourceGroup(split(foundation.identityId, '/')[2], split(foundation.identityId, '/')[4])
 }
 
 resource insights 'Microsoft.Insights/components@2020-02-02' existing = {

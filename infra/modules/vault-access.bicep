@@ -25,12 +25,12 @@ resource vault 'Microsoft.KeyVault/vaults@2026-02-01' existing = {
 
 resource readerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
   name: last(split(readerIdentityResourceId, '/'))
-  scope: resourceGroup(split(readerIdentityResourceId, '/')[4])
+  scope: resourceGroup(split(readerIdentityResourceId, '/')[2], split(readerIdentityResourceId, '/')[4])
 }
 
 resource writerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
   name: last(split(writerIdentityResourceId, '/'))
-  scope: resourceGroup(split(writerIdentityResourceId, '/')[4])
+  scope: resourceGroup(split(writerIdentityResourceId, '/')[2], split(writerIdentityResourceId, '/')[4])
 }
 
 var readerRoleId = subscriptionResourceId('Microsoft.Authorization/roleDefinitions', '4633458b-17de-408a-b874-0445c86b69e6')

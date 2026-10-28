@@ -95,6 +95,26 @@ class WorkerPreflightTests(unittest.TestCase):
                         self.prepare(document, query)
                     query.assert_not_called()
 
+    def test_cross_subscription_workers_use_identity_subscription_and_preserve_tenant_check(self):
+        identity_subscription = "22222222-2222-2222-2222-222222222222"
+        external_workers = [worker.replace(SUB, identity_subscription) for worker in WORKERS]
+        for side, worker, external in zip(("primary", "secondary"), WORKERS, external_workers):
+            self.document["parameters"][side + "WorkerIdentityResourceId"]["value"] = external
+            self.resources[external] = {**self.resources[worker], "id": external}
+
+        def query(*args):
+            if args[:2] == ("resource", "show") and args[3] in external_workers:
+                self.assertEqual(args[args.index("--subscription") + 1], identity_subscription)
+            if args[:2] == ("account", "show"):
+                self.assertEqual(args[args.index("--subscription") + 1], SUB)
+            return self.query(*args)
+
+        prepared = self.prepare(query=query)
+        self.assertEqual(set(prepared["parameters"]["resolvedWorkerIdentities"]["value"]), {worker.lower() for worker in external_workers})
+        self.resources[external_workers[0]]["properties"]["tenantId"] = identity_subscription
+        with self.assertRaisesRegex(ValueError, "different tenant"):
+            self.prepare(query=query)
+
     def test_invalid_flags_identity_ids_and_shared_identity_are_rejected(self):
         for values in (
             {"managePermissions": "false"}, {"primaryWorkerIdentityResourceId": "not-an-id"},

@@ -41,8 +41,11 @@ deployment. This mode does not bypass any of them.
 
 Prepare two distinct user-assigned identities, two compatible private vaults,
 and each vault's existing Event Grid system topic with its **system-assigned**
-identity enabled. All must be in the deployment subscription/tenant; groups may
-differ. Vault and topic regions must match their configured regional locations.
+identity enabled. All must share the deployment tenant. Worker identities may be
+in other subscriptions; vaults and topics must be in the deployment subscription.
+Resource groups may differ. Grant the operator identity read/assign at the actual
+identity scopes, including other subscriptions; deployment-subscription Contributor
+alone does not cover them. Vault and topic regions must match their configured regional locations.
 Use [existing-vault requirements](existing-vaults.md) for the compatibility checks.
 Record ARM IDs, not principal/client IDs, for the operator's parameter file.
 

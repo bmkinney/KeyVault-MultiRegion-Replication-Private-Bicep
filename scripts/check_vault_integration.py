@@ -49,7 +49,9 @@ def validate_id(resource_id, subscription, kind):
     match = RESOURCE_ID.fullmatch(resource_id)
     if not match or match[3].lower() != kind.lower():
         raise ValueError(f"Expected a full {kind} ARM ID")
-    if match[1].lower() != subscription.lower():
+    if kind.lower() == "microsoft.managedidentity/userassignedidentities":
+        UUID(match[1])
+    elif match[1].lower() != subscription.lower():
         raise ValueError("Existing resources must be in the deployment subscription")
     return match
 
@@ -193,8 +195,9 @@ def preflight_workers(parameters, subscription, vaults, query):
     for worker_id in worker_ids:
         if not worker_id:
             continue
+        identity_subscription = validate_id(worker_id, subscription, "Microsoft.ManagedIdentity/userAssignedIdentities")[1]
         identity = query(
-            "resource", "show", "--ids", worker_id, "--subscription", subscription,
+            "resource", "show", "--ids", worker_id, "--subscription", identity_subscription,
             "--api-version", "2024-11-30",
         )
         if identity.get("id", "").lower() != worker_id.lower():

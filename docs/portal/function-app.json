@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "2573206064862487916"
+      "templateHash": "169413752490734963"
     }
   },
   "parameters": {
@@ -142,7 +142,7 @@
             },
             {
               "name": "AzureWebJobsStorage__clientId",
-              "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, split(parameters('foundation').identityId, '/')[4]), 'Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('foundation').identityId, '/'))), '2024-11-30').clientId]"
+              "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', split(parameters('foundation').identityId, '/')[2], split(parameters('foundation').identityId, '/')[4]), 'Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('foundation').identityId, '/'))), '2024-11-30').clientId]"
             },
             {
               "name": "ServiceBusConnection__fullyQualifiedNamespace",
@@ -154,7 +154,7 @@
             },
             {
               "name": "ServiceBusConnection__clientId",
-              "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, split(parameters('foundation').identityId, '/')[4]), 'Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('foundation').identityId, '/'))), '2024-11-30').clientId]"
+              "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', split(parameters('foundation').identityId, '/')[2], split(parameters('foundation').identityId, '/')[4]), 'Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('foundation').identityId, '/'))), '2024-11-30').clientId]"
             },
             {
               "name": "APPLICATIONINSIGHTS_CONNECTION_STRING",
@@ -162,11 +162,11 @@
             },
             {
               "name": "APPLICATIONINSIGHTS_AUTHENTICATION_STRING",
-              "value": "[format('ClientId={0};Authorization=AAD', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, split(parameters('foundation').identityId, '/')[4]), 'Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('foundation').identityId, '/'))), '2024-11-30').clientId)]"
+              "value": "[format('ClientId={0};Authorization=AAD', reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', split(parameters('foundation').identityId, '/')[2], split(parameters('foundation').identityId, '/')[4]), 'Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('foundation').identityId, '/'))), '2024-11-30').clientId)]"
             },
             {
               "name": "WORKER_CLIENT_ID",
-              "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, split(parameters('foundation').identityId, '/')[4]), 'Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('foundation').identityId, '/'))), '2024-11-30').clientId]"
+              "value": "[reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', split(parameters('foundation').identityId, '/')[2], split(parameters('foundation').identityId, '/')[4]), 'Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('foundation').identityId, '/'))), '2024-11-30').clientId]"
             },
             {
               "name": "SOURCE_VAULT_ID",

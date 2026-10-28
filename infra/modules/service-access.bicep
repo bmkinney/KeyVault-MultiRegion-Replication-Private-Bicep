@@ -7,7 +7,7 @@ param topicPrincipalId string = ''
 
 resource identity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
   name: last(split(workerIdentityResourceId, '/'))
-  scope: resourceGroup(split(workerIdentityResourceId, '/')[4])
+  scope: resourceGroup(split(workerIdentityResourceId, '/')[2], split(workerIdentityResourceId, '/')[4])
 }
 resource topic 'Microsoft.EventGrid/systemTopics@2025-02-15' existing = {
   name: last(split(systemTopicResourceId, '/'))

@@ -18,7 +18,7 @@ Copy `infra\parameters\delegated.example.bicepparam` to the Git-ignored
 
 | Parameter | Meaning |
 | --- | --- |
-| `provisioningIdentityResourceId` | Precreated, administrator-authorized UAMI in the deployment subscription/tenant |
+| `provisioningIdentityResourceId` | Precreated, administrator-authorized UAMI in any subscription in the deployment tenant |
 | `provisioningResourceGroupName` | Existing RG where the operator can deploy short-lived provisioning containers |
 | `provisioningLocation` | Approved ACI execution region; management-plane connectivity required |
 | `provisioningTimeoutSeconds` | Per-deployment/job deadline, 120-7,200 seconds; default 1,800 |
@@ -31,6 +31,13 @@ model; mixed pairs remain supported. Explicitly select secrets when reusing a
 vault, and leave both activation flags false until code and runtime access have
 been verified. No principal/client IDs or internal discovery fields belong in
 the user parameter file.
+
+Provisioning and existing worker identities may each be in a different subscription,
+provided they share the deployment tenant. Supply their full ARM IDs; preflight
+reads each identity in its own subscription and rejects cross-tenant identities.
+Vaults, system topics, the execution RG, and solution deployments remain in the
+deployment subscription. `-SubscriptionId` still selects that target subscription,
+not the identity subscription.
 
 Use the supported orchestrator, not a raw deployment of `main.bicep`:
 
@@ -111,7 +118,7 @@ approval; the deployment never grants itself privileges or elevates the operator
 | Principal | Required authority |
 | --- | --- |
 | Operator | Contributor/resource deployment and read at solution, execution, and referenced resource scopes; identity read/assign at the provisioning and runtime UAMI scopes; topic inventory and vault grant reads used by preflight |
-| Provisioning UAMI | `Microsoft.Resources/deployments/*` at the solution RGs and selected existing vault RGs where nested access modules run; worker identity read/write in solution RGs; vault read/write for newly managed vaults and topic read/write for newly managed topics |
+| Provisioning UAMI | `Microsoft.Resources/deployments/*` at the solution RGs and selected existing vault RGs where nested access modules run; worker identity read/write in solution RGs and read at reused worker identity scopes, including other subscriptions; vault read/write for newly managed vaults and topic read/write for newly managed topics |
 | Provisioning UAMI | Role assignment read/write at the solution RGs (inherited by their eventual service resources) and selected RBAC vaults; restrict assignable roles/principal types with administrator conditions where supported |
 | Provisioning UAMI | Access-policy write at selected policy-based existing vaults; no key/secret-value access is needed by provisioning code |
 
@@ -120,6 +127,12 @@ actions; a separate Managed Identity Operator assignment is not inherently
 required. Actual deny assignments, custom roles, locks, policy, provider
 registration, ACI quota, and location restrictions still apply. Register
 Microsoft.ContainerInstance in addition to the normal solution providers.
+
+Contributor in the deployment subscription does not grant identity read/assign
+in another subscription. Administrators must grant the operator those actions
+at each reused provisioning/runtime identity scope separately. Keeping an
+identity in another subscription does not grant it access to deployment resources;
+its required target-scope permissions in the table above must still be provisioned.
 
 For RBAC vaults, administrators predefine a custom role with **only** the four
 data actions in the [runtime grant matrix](deployment-contributor.md#administrator-preparation),

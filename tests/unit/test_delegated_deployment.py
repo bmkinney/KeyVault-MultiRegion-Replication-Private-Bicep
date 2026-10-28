@@ -203,6 +203,43 @@ class DelegatedTests(unittest.TestCase):
                 self.assertFalse(values["enableWorker"])
         self.assertTrue(all(call[0] != "identity" for call in fake.calls))
 
+    def test_cross_subscription_provisioner_and_workers_preserve_deployment_scopes(self):
+        for selected in (("provisioning",), ("primaryWorker", "secondaryWorker"),
+                         ("provisioning", "primaryWorker", "secondaryWorker")):
+            with self.subTest(selected=selected):
+                fake = AzureDouble()
+                external_ids = []
+                for index, name in enumerate(selected, 2):
+                    key = name + "IdentityResourceId"
+                    original = fake.values[key]
+                    external_subscription = f"{index}" * 8 + "-2222-2222-2222-222222222222"
+                    external = original.replace(SUB, external_subscription)
+                    fake.resources[external] = {**fake.resources.pop(original), "id": external}
+                    fake.values[key] = external
+                    external_ids.append(external)
+                fake.run(apply=True)
+                reads = [call for call in fake.calls if call[:2] == ("resource", "show") and call[3] in external_ids]
+                self.assertEqual({call[3] for call in reads}, set(external_ids))
+                for call in reads:
+                    self.assertEqual(call[call.index("--subscription") + 1], call[3].split("/")[2])
+                for call in fake.calls:
+                    if call[:2] == ("group", "show") or call[0] == "deployment":
+                        self.assertEqual(call[call.index("--subscription") + 1], SUB)
+                core = next(values for stage, values in fake.contributor if stage == "main.bicep")
+                for side in ("primary", "secondary"):
+                    key = side + "WorkerIdentityResourceId"
+                    self.assertEqual(core[key], fake.values[key])
+                for stage, values in fake.contributor:
+                    if stage == "provisioning-job.bicep":
+                        self.assertEqual(values["provisioningIdentityResourceId"], fake.values["provisioningIdentityResourceId"])
+
+    def test_cross_tenant_provisioner_is_rejected_before_deployment(self):
+        fake = AzureDouble()
+        fake.resources[PROVISIONER]["properties"]["tenantId"] = "22222222-2222-2222-2222-222222222222"
+        with self.assertRaisesRegex(ValueError, "different tenant"):
+            fake.run(apply=True)
+        self.assertEqual(fake.contributor, [])
+
     def test_new_resources_bootstrap_before_core_and_grants(self):
         fake = AzureDouble(new=True)
         fake.run(apply=True)
