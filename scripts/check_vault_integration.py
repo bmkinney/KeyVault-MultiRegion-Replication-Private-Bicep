@@ -171,7 +171,8 @@ def preflight(parameters, subscription, query=azure_json):
             short_side = "p" if side == "primary" else "s"
             workload = value("workload", "mrkv")
             pattern = rf"evgt-{re.escape(workload)}-{short_side}-[a-z0-9]{{8}}"
-            own_group = topic["id"].split("/")[4] == "rg-" + topic["name"].removeprefix("evgt-")
+            topic_group = topic["id"].split("/")[4].lower()
+            own_group = topic_group in ("rg-" + topic["name"].removeprefix("evgt-"), vault_id.split("/")[4].lower())
             if not (
                 re.fullmatch(pattern, topic["name"]) and own_group
                 and topic.get("tags", {}).get("workload") == workload

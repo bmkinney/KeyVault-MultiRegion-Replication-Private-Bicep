@@ -318,6 +318,18 @@ class PreflightTests(unittest.TestCase):
         })
         preflight(self.config, SUBSCRIPTION, Mock(side_effect=[self.vault, [self.topic]]))
 
+    def test_own_topic_in_the_vault_resource_group_can_be_retried(self):
+        vault_group = VAULT_ID.split("/")[4]
+        self.topic.update({
+            "name": "evgt-mrkv-p-abcdefgh",
+            "id": f"/subscriptions/{SUBSCRIPTION}/resourceGroups/{vault_group}/providers/Microsoft.EventGrid/systemTopics/evgt-mrkv-p-abcdefgh",
+            "tags": {"workload": "mrkv", "purpose": "private-secret-replication-demo"},
+        })
+        preflight(self.config, SUBSCRIPTION, Mock(side_effect=[self.vault, [self.topic]]))
+        self.topic["tags"] = {}
+        with self.assertRaisesRegex(ValueError, "already exists"):
+            preflight(self.config, SUBSCRIPTION, Mock(side_effect=[self.vault, [self.topic]]))
+
     def test_reserved_route_collision_rejected(self):
         self.config["primarySystemTopicResourceId"] = {"value": TOPIC_ID}
         route = {"name": "mrkv-abcdefgh-secret-events", "properties": {"labels": []}}

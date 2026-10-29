@@ -121,7 +121,7 @@ approval; the deployment never grants itself privileges or elevates the operator
 | Principal | Required authority |
 | --- | --- |
 | Operator | Contributor/resource deployment and read at solution and referenced resource scopes (and the execution RG only if overridden); identity read/assign at the provisioning and runtime UAMI scopes; topic inventory and vault grant reads used by preflight |
-| Provisioning UAMI | `Microsoft.Resources/deployments/*` at the solution RGs and selected existing vault RGs where nested access modules run; worker identity read/write in solution RGs and read at reused worker identity scopes, including other subscriptions; vault read/write for newly managed vaults and topic read/write for newly managed topics |
+| Provisioning UAMI | `Microsoft.Resources/deployments/*` at the solution RGs and selected existing vault RGs where nested access modules run, and where a new system topic must be created (Event Grid requires it in the vault's RG, with Event Grid write there); worker identity read/write in solution RGs and read at reused worker identity scopes, including other subscriptions; vault read/write for newly managed vaults and topic read/write for newly managed topics |
 | Provisioning UAMI | Role assignment read/write at the solution RGs (inherited by their eventual service resources) and selected RBAC vaults; restrict assignable roles/principal types with administrator conditions where supported |
 | Provisioning UAMI | Access-policy write at selected policy-based existing vaults; no key/secret-value access is needed by provisioning code |
 

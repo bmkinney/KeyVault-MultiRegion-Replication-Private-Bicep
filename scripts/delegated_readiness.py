@@ -144,7 +144,8 @@ def grant_guide(subscription, provisioner_id, principal, worker_ids):
         "Administrator grants required (never granted automatically):",
         f"  Operator, subscription {subscription}: deployment rights (Contributor) for resource groups and deployments.",
         *(f"  Operator, {item}: Managed Identity Operator (read and assign)." for item in reused),
-        f"  Provisioning identity {principal or provisioner_id}, subscription {subscription} or both solution groups: "
+        f"  Provisioning identity {principal or provisioner_id}, subscription {subscription} or both solution groups "
+        "plus the resource group of any reused vault that needs a new system topic: "
         "Managed Identity Contributor, Key Vault Contributor, EventGrid Contributor, "
         "and role assignment write (RBAC Administrator, restricted by conditions).",
         *(f"  Provisioning identity, {item}: Reader." for item in reused[1:]),

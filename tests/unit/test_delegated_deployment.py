@@ -65,7 +65,7 @@ class AzureDouble:
 
     def add_topic(self, resource_id, vault, location, tags):
         self.resources[resource_id] = {
-            "id": resource_id, "source": vault, "location": location, "tags": tags,
+            "id": resource_id, "name": resource_id.split("/")[-1], "source": vault, "location": location, "tags": tags,
             "identity": {"principalId": "99999999-1111-1111-1111-111111111111"},
         }
 
@@ -151,6 +151,9 @@ class AzureDouble:
                         self.add_vault(vault, child_values["location"], child_values["tags"],
                                        child_values["vaultAuthorizationModel"] == "rbac")
                     if child_values["createTopic"]:
+                        # Event Grid rejects a system topic outside its source vault's resource group.
+                        if group != vault.split("/")[4]:
+                            raise AssertionError("System topic resource group must match with source resource group.")
                         topic = f"{base}/Microsoft.EventGrid/systemTopics/evgt-{prefix}"
                         self.add_topic(topic, vault, child_values["location"], child_values["tags"])
                 child_id = f"{BASE}/resourceGroups/{group}/providers/Microsoft.Resources/deployments/{payload['deployment']['name']}"
@@ -337,6 +340,28 @@ class DelegatedTests(unittest.TestCase):
             fake.resources[moved] = {**fake.resources.pop(original), "id": moved}
             fake.values[key] = moved
         return other
+
+    def test_topic_for_an_existing_vault_is_created_in_the_vault_group_and_reused_on_retry(self):
+        fake = AzureDouble()
+        for side in ("primary", "secondary"):
+            del fake.values[f"{side}SystemTopicResourceId"]
+        for resource_id in [key for key, item in fake.resources.items() if "source" in item]:
+            del fake.resources[resource_id]
+        fake.run(apply=True)
+        parents = [values for stage, values in fake.privileged if stage == "provision-vault-topic.bicep"]
+        self.assertEqual(len(parents), 2)
+        for values in parents:
+            self.assertFalse(values["createVault"])
+            self.assertTrue(values["createTopic"])
+        topics = [key for key, item in fake.resources.items() if "source" in item]
+        self.assertEqual(len(topics), 2)
+        for topic in topics:
+            self.assertEqual(topic.split("/")[4], fake.resources[topic]["source"].split("/")[4])
+        fake.privileged.clear()
+        fake.values.update({f"{side}SystemTopicResourceId": "" for side in ("primary", "secondary")})
+        fake.run(apply=True)
+        after = [key for key, item in fake.resources.items() if "source" in item]
+        self.assertEqual(sorted(after), sorted(topics))
 
     def test_cross_subscription_provisioner_needs_no_execution_group(self):
         fake = AzureDouble(new=True)

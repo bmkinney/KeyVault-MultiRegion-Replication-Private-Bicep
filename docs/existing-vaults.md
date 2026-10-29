@@ -191,8 +191,10 @@ its existing subscriptions. Existing subscriptions keep their destinations and
 filters. Names in this reserved pattern require the solution's ownership label
 and matching queue destination to pass preflight.
 
-When no topic exists, the solution creates one in its regional infrastructure
-group, in the same subscription/location as the vault. A subsequent retry
+When no topic exists, the solution creates one in the existing vault's own
+resource group, because Event Grid requires a system topic to share its source
+vault's group. In delegated mode the provisioning identity therefore needs
+deployment and Event Grid write rights in that group. A subsequent retry
 recognizes that solution-owned topic. Do not switch between created/reused topic
 configurations casually; this changes the subscription name and can leave an
 older subscription behind under incremental deployment. Keep desired-state

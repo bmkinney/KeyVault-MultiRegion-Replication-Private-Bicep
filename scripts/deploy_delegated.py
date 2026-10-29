@@ -395,7 +395,6 @@ class DelegatedDeployment:
         for side, short in (("primary", "p"), ("secondary", "s")):
             group, token = groups[short]
             prefix = group.removeprefix("rg-")
-            base = f"/subscriptions/{self.subscription}/resourceGroups/{group}/providers"
             stamp = {
                 "side": side, "group": group, "prefix": prefix, "storageToken": f"{workload}{short}{token}",
                 "location": layout_values[side + "Location"],
@@ -406,7 +405,11 @@ class DelegatedDeployment:
                 ("SystemTopic", "Microsoft.EventGrid/systemTopics", f"evgt-{prefix}"),
             ):
                 parameter = f"{side}{suffix}ResourceId"
-                stamp[suffix] = values.get(parameter) or f"{base}/{kind}/{name}"
+                # Event Grid requires a system topic to share its source vault's resource group.
+                owner_group = stamp["Vault"].split("/")[4] if suffix == "SystemTopic" else group
+                stamp[suffix] = values.get(parameter) or (
+                    f"/subscriptions/{self.subscription}/resourceGroups/{owner_group}/providers/{kind}/{name}"
+                )
                 stamp["owned" + suffix] = not bool(values.get(parameter))
                 if stamp["owned" + suffix]:
                     stamp["existing" + suffix] = self.owned_or_missing(stamp[suffix])
@@ -455,7 +458,7 @@ class DelegatedDeployment:
                     "replicaWriterIdentityResourceId": other["WorkerIdentity"],
                     "workerPrincipalId": workers[stamp["WorkerIdentity"].lower()]["principalId"],
                     "replicaWriterPrincipalId": workers[other["WorkerIdentity"].lower()]["principalId"],
-                }, stamp["group"], stamp["side"] + "-parents")
+                }, stamp["group"] if stamp["ownedVault"] else stamp["Vault"].split("/")[4], stamp["side"] + "-parents")
                 deferred |= not self.apply and changed
         if deferred:
             self.emit("Preview only: parent bootstrap reviewed. Infrastructure and IAM previews are DEFERRED until authorized bootstrap completes. Nothing was created.")
@@ -470,7 +473,7 @@ class DelegatedDeployment:
         ):
             raise ValueError("Vault authorization changed during delegated preparation; review a fresh preview")
         core["parameters"]["resolvedOwnedFoundationDiagnostics"] = {"value": {
-            stamp["side"]: {"vault": stamp["ownedVault"], "topic": stamp["ownedSystemTopic"]} for stamp in stamps
+            stamp["side"]: {"vault": stamp["ownedVault"], "topic": stamp["ownedSystemTopic"] and stamp["ownedVault"]} for stamp in stamps
         }}
         for flag in ("enableWorker", "enableEventRouting"):
             core["parameters"][flag] = {"value": False}
