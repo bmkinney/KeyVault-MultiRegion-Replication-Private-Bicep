@@ -42,6 +42,7 @@ class AzureDouble:
                        "secretNames": ["selected"], "provisioningTimeoutSeconds": 120}
         self.bad_preview = None
         self.running = False
+        self.unregistered, self.denied, self.ungranted = set(), set(), False
         self.now = 0
         if not new:
             for number, side in enumerate(("primary", "secondary"), 2):
@@ -89,6 +90,8 @@ class AzureDouble:
         if args[:4] == ("eventgrid", "system-topic", "event-subscription", "list"):
             return []
         if args[:3] == ("role", "assignment", "list"):
+            if "--assignee" in args and not self.ungranted:
+                return [{"principalId": option("--assignee"), "scope": BASE}]
             return []
         if args[:3] == ("role", "definition", "list"):
             return [{"id": ROLE, "roleType": "CustomRole", "assignableScopes": [BASE],
@@ -107,11 +110,20 @@ class AzureDouble:
                 if source == "provisioning-layout.bicep":
                     changes = [{"resourceId": f"{BASE}/resourceGroups/rg-mrkv-{side}-abcdefgh",
                                 "changeType": "NoChange" if self.groups_exist else "Create"} for side in ("p", "s")]
+                    if self.groups_exist:
+                        # Azure lists existing child resources of the groups as Ignore.
+                        changes += [{"resourceId": f"{BASE}/resourceGroups/rg-mrkv-{side}-abcdefgh/providers/Microsoft.KeyVault/vaults/kv-{side}",
+                                     "changeType": "Ignore"} for side in ("p", "s")]
                 else:
                     kind = "NoChange" if source == "main.bicep" and self.infrastructure_exists else "Create"
                     changes = [{"resourceId": f"{BASE}/resourceGroups/sample/providers/Synthetic/resources/item",
                                 "changeType": kind}]
                 return {"status": "Succeeded", "changes": changes}
+        if args[:2] == ("provider", "show"):
+            return {"registrationState": "NotRegistered" if option("--namespace") in self.unregistered else "Registered"}
+        if args[0] == "rest" and option("--method") == "get":
+            denied = any(scope.lower() in option("--url").lower() for scope in self.denied)
+            return {"value": [{"actions": ["Microsoft.Resources/*/read"] if denied else ["*"], "notActions": []}]}
         if args[0] == "rest":
             body = json.loads(Path(option("--body").removeprefix("@")).read_text())
             deployment_id = option("--url").split("?")[0].removeprefix("https://management.azure.com")
@@ -161,6 +173,9 @@ class AzureDouble:
         if args[:2] == ("container", "logs"):
             return self.jobs[args[args.index("--name") + 1]][1]
         if args[:2] == ("container", "stop"):
+            return ""
+        if args[:2] == ("container", "delete"):
+            self.jobs.pop(args[args.index("--name") + 1])
             return ""
         raise AssertionError(args)
 
@@ -292,7 +307,7 @@ class DelegatedTests(unittest.TestCase):
         self.assertEqual(fake.contributor, [])
         fake.values["replicaWriterRoleResourceId"] = ROLE
         fake.run(apply=True)
-        calls = [call for call in fake.calls if call[:3] == ("role", "assignment", "list")]
+        calls = [call for call in fake.calls if call[:3] == ("role", "assignment", "list") and "--assignee" not in call]
         self.assertTrue(calls)
         self.assertTrue(all("--scope" in call and "--all" not in call for call in calls))
         self.assertEqual({values["useRbac"] for _, values in fake.privileged}, {True, False})
@@ -300,7 +315,7 @@ class DelegatedTests(unittest.TestCase):
     def test_rejects_conflicting_modes_worker_provisioner_reuse_and_unowned_names(self):
         for changes in (
             {"managePermissions": False}, {"primaryWorkerIdentityResourceId": PROVISIONER},
-            {"provisioningResourceGroupName": ""}, {"provisioningTimeoutSeconds": 0},
+            {"provisioningResourceGroupName": "bad name"}, {"provisioningTimeoutSeconds": 0},
         ):
             fake = AzureDouble()
             fake.values.update(changes)
@@ -313,6 +328,93 @@ class DelegatedTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Refusing to adopt"):
             fake.run(apply=True)
         self.assertEqual(fake.contributor, [])
+
+    def move_to_other_subscription(self, fake, *keys):
+        other = "22222222-2222-2222-2222-222222222222"
+        for key in keys:
+            original = fake.values[key]
+            moved = original.replace(SUB, other)
+            fake.resources[moved] = {**fake.resources.pop(original), "id": moved}
+            fake.values[key] = moved
+        return other
+
+    def test_cross_subscription_provisioner_needs_no_execution_group(self):
+        fake = AzureDouble(new=True)
+        del fake.values["provisioningResourceGroupName"]
+        self.move_to_other_subscription(fake, "provisioningIdentityResourceId")
+        fake.run(apply=True)
+        shown = [call for call in fake.calls if call[:2] == ("container", "show")]
+        self.assertTrue(shown)
+        for call in shown:
+            self.assertEqual(call[call.index("--resource-group") + 1], "rg-mrkv-p-abcdefgh")
+        self.assertNotIn(("group", "show"), [call[:2] for call in fake.calls])
+        jobs = [values for stage, values in fake.contributor if stage == "provisioning-job.bicep"]
+        self.assertTrue(jobs)
+        self.assertTrue(all(values["location"] == "eastus" for values in jobs))
+
+    def test_completed_container_is_deleted_but_failed_one_is_kept(self):
+        fake = AzureDouble()
+        fake.run(apply=True)
+        deletes = [call for call in fake.calls if call[:2] == ("container", "delete")]
+        self.assertEqual(len(deletes), 2)
+        self.assertEqual(fake.jobs, {})
+        failed = AzureDouble()
+        failed.running = True
+        with self.assertRaises(TimeoutError):
+            failed.run(apply=True)
+        self.assertNotIn(("container", "delete"), [call[:2] for call in failed.calls])
+
+    def test_container_delete_failure_is_a_warning(self):
+        fake = AzureDouble()
+        original = fake.text
+
+        def text(*arguments):
+            if arguments[:2] == ("container", "delete"):
+                raise RuntimeError("denied")
+            return original(*arguments)
+
+        fake.text = text
+        _, output = fake.run(apply=True)
+        self.assertIn("could not delete completed container", output)
+
+    def test_readiness_reports_every_blocker_before_any_change(self):
+        fake = AzureDouble()
+        fake.unregistered = {"Microsoft.ContainerInstance"}
+        fake.denied = {PROVISIONER}
+        fake.ungranted = True
+        fake.values["provisioningResourceGroupName"] = "missing"
+        original = fake.query
+
+        def query(*arguments):
+            if arguments[:2] == ("group", "show"):
+                raise RuntimeError("(ResourceGroupNotFound) missing")
+            return original(*arguments)
+
+        fake.query = query
+        with self.assertRaises(ValueError) as error:
+            fake.run(apply=True)
+        for expected in ("Microsoft.ContainerInstance", "assign/action", "no role assignment", "'missing'"):
+            self.assertIn(expected, str(error.exception))
+        self.assertEqual(fake.contributor, [])
+        self.assertEqual(fake.privileged, [])
+
+    def test_identity_subscription_in_another_tenant_or_unreadable_is_a_blocker(self):
+        for tenant, expected in (("ffffffff-ffff-ffff-ffff-ffffffffffff", "cross-tenant"), (None, "Sign in with an account")):
+            fake = AzureDouble()
+            other = self.move_to_other_subscription(fake, "provisioningIdentityResourceId")
+            original = fake.query
+
+            def query(*arguments, tenant=tenant, other=other, original=original):
+                if arguments[:2] == ("account", "show") and arguments[arguments.index("--subscription") + 1] == other:
+                    if tenant is None:
+                        raise RuntimeError("(SubscriptionNotFound)")
+                    return {"tenantId": tenant}
+                return original(*arguments)
+
+            fake.query = query
+            with self.subTest(expected=expected), self.assertRaisesRegex(ValueError, expected):
+                fake.run(apply=True)
+            self.assertEqual(fake.contributor, [])
 
     def test_job_timeout_stops_exact_execution_and_reports_partial_work(self):
         fake = AzureDouble()
@@ -330,8 +432,13 @@ class DelegatedTests(unittest.TestCase):
         fake.values["enableEventRouting"] = True
         fake.run(apply=True)
         cores = [values for stage, values in fake.contributor if stage == "main.bicep"]
+        self.assertEqual(len(cores), 3)
         self.assertFalse(cores[0]["enableWorker"])
-        self.assertTrue(cores[1]["enableWorker"])
+        self.assertFalse(cores[0]["deployEventRouting"])
+        self.assertTrue(cores[1]["deployEventRouting"])
+        self.assertFalse(cores[1]["enableWorker"])
+        self.assertFalse(cores[1]["enableEventRouting"])
+        self.assertTrue(cores[2]["enableWorker"])
 
     def test_parent_and_infrastructure_preview_deferral_is_read_only(self):
         fake = AzureDouble(new=True)
@@ -538,6 +645,11 @@ class DelegatedTests(unittest.TestCase):
             encode_payload({"data": random.Random(0).randbytes(60000).hex()})
         preview = {"status": "Succeeded", "properties": {"changes": []}}
         self.assertEqual(validate_preview(preview), [])
+        existing = {"status": "Succeeded", "changes": [
+            {"resourceId": "/existing/container", "changeType": "Ignore"},
+            {"resourceId": "/new/identity", "changeType": "Create"},
+        ]}
+        self.assertEqual(len(validate_preview(existing)), 2)
         for invalid in (None, {"status": "Failed"}, {"status": "Succeeded", "changes": {}, "diagnostics": []},
                         {"status": "Succeeded", "changes": [{"resourceId": "id", "changeType": "Delete"}]},
                         {"status": "Succeeded", "changes": [], "nextLink": "next"}):

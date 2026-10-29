@@ -77,8 +77,11 @@ Administrators must first prepare both identities, vaults, system topics, and
 their runtime grants; this mode does not create or change IAM permissions.
 For active identity/grant creation by a separate provisioning identity, instead
 start with `infra\parameters\delegated.example.bicepparam`, keep
-`managePermissions = true`, and supply `provisioningIdentityResourceId` plus the
-execution RG. Administrators must pregrant its scoped authority. The supported
+`managePermissions = true`, and supply `provisioningIdentityResourceId`; the
+provisioning identity may live in another subscription of the same tenant, and
+no execution RG is needed. Administrators must pregrant its scoped authority.
+Every run begins with a readiness report listing missing prerequisites and the
+exact grants required. The supported
 runner stages actual Bicep previews and waits for verified job completion; a
 first-run preview explicitly defers stages whose prerequisites do not yet exist.
 The runner discovers existing-vault/identity metadata and, in managed-permissions

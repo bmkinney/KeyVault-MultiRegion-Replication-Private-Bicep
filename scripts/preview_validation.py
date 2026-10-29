@@ -13,7 +13,8 @@ def validate_preview(preview, *, allow_delete=False):
     for envelope in (preview, result):
         if envelope.get("diagnostics") or envelope.get("potentialChanges") or envelope.get("nextLink"):
             raise ValueError("What-if coverage is incomplete")
-    allowed = {"Create", "Modify", "NoChange"} | ({"Delete"} if allow_delete else set())
+    # Ignore: an existing resource the stage template does not define; incremental mode never touches it.
+    allowed = {"Create", "Modify", "NoChange", "Ignore"} | ({"Delete"} if allow_delete else set())
     for change in changes:
         if (
             not isinstance(change, dict) or change.get("changeType") not in allowed

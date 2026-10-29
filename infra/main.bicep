@@ -29,10 +29,10 @@ param managePermissions bool = true
 @description('Precreated provisioning UAMI in any subscription in this tenant for keyless delegated bootstrap/IAM via Deploy.ps1. Empty retains the selected existing workflow.')
 param provisioningIdentityResourceId string = ''
 
-@description('Existing execution resource group for delegated keyless provisioning jobs.')
+@description('Optional override: existing resource group in the deployment subscription for delegated provisioning containers. Empty uses the primary solution group.')
 param provisioningResourceGroupName string = ''
 
-@description('ACI execution region; management-plane execution only, no private vault access.')
+@description('ACI execution region; management-plane execution only, no private vault access. The runner defaults to primaryLocation when unset.')
 param provisioningLocation string = 'eastus'
 
 @description('Maximum time to wait for each delegated job, including Azure deployment operations.')
@@ -101,6 +101,9 @@ param alertEmail string = ''
 
 @description('Activate event subscriptions only after publishing and verifying both workers.')
 param enableEventRouting bool = false
+
+@description('Create the event subscriptions. Delegated runs defer them until the topic identities hold their delivery grants.')
+param deployEventRouting bool = true
 
 @description('Enable the authoritative worker only after publishing. Never enable both workers.')
 param enableWorker bool = false
@@ -399,7 +402,7 @@ module secondaryApp './modules/function-app.bicep' = {
   ]
 }
 
-module primaryRouting './modules/event-routing.bicep' = {
+module primaryRouting './modules/event-routing.bicep' = if (deployEventRouting) {
   name: 'primary-routing'
   scope: resourceGroup(empty(primarySystemTopicResourceId) ? primaryGroup.name : split(primarySystemTopicResourceId, '/')[4])
   params: {
@@ -414,7 +417,7 @@ module primaryRouting './modules/event-routing.bicep' = {
   ]
 }
 
-module secondaryRouting './modules/event-routing.bicep' = {
+module secondaryRouting './modules/event-routing.bicep' = if (deployEventRouting) {
   name: 'secondary-routing'
   scope: resourceGroup(empty(secondarySystemTopicResourceId) ? secondaryGroup.name : split(secondarySystemTopicResourceId, '/')[4])
   params: {

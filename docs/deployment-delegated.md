@@ -19,8 +19,8 @@ Copy `infra\parameters\delegated.example.bicepparam` to the Git-ignored
 | Parameter | Meaning |
 | --- | --- |
 | `provisioningIdentityResourceId` | Precreated, administrator-authorized UAMI in any subscription in the deployment tenant |
-| `provisioningResourceGroupName` | Existing RG where the operator can deploy short-lived provisioning containers |
-| `provisioningLocation` | Approved ACI execution region; management-plane connectivity required |
+| `provisioningResourceGroupName` | Optional override. Omit it: the temporary provisioning container runs in the primary solution group the tool creates. If set, it must be an existing RG **in the deployment subscription** (never the identity's subscription) |
+| `provisioningLocation` | Optional ACI execution region; defaults to `primaryLocation`. Management-plane connectivity required |
 | `provisioningTimeoutSeconds` | Per-deployment/job deadline, 120-7,200 seconds; default 1,800 |
 | `managePermissions` | Keep `true`: grants are actively provisioned, but by the provisioning identity |
 | Worker/vault/topic IDs | Leave empty to create under the provisioning identity, or supply existing IDs to reference |
@@ -61,6 +61,7 @@ provisioning identity with full permission checking before apply.
 | Parent bootstrap | Provisioning UAMI | Create solution-managed vaults with complete worker policies, and missing system topics with their separate system identities |
 | Ordinary infrastructure | Contributor | Deploy private networking, storage, messaging, Functions, diagnostics, alerts, and event subscriptions; no IAM writes; both workers/routes fenced |
 | Runtime authorization | Provisioning UAMI | Apply exact service role assignments and per-vault RBAC or additive existing-vault policies |
+| Event routing | Contributor | Create the fenced event subscriptions only after the grants exist, because Event Grid validates delivery permission when a subscription is created |
 | Requested activation | Contributor | Only after all authorization stages complete; honors the user's explicit activation flags |
 
 Each privileged stage uses `infra\modules\provisioning-job.bicep`. The container
@@ -97,8 +98,10 @@ Inspect those operations before retrying. ARM names are deterministic so retries
 do not intentionally create new identities or grants.
 
 For a failed run, retain the printed execution/deployment names and inspect
-`az container logs` in the execution RG and
-`az deployment operation group list` in the failed stage's target RG. A stopped
+`az container logs` in the execution group (the primary solution group unless
+overridden) and `az deployment operation group list` in the failed stage's target
+RG. After a stage is confirmed successful the terminated container is deleted; a
+failed stage's container is kept for log inspection. A stopped
 execution is not evidence that its previously submitted ARM operations stopped.
 
 Provision/reprovision deliberately fences workers/routes before updating grants.
@@ -109,7 +112,7 @@ not prove grant propagation, private connectivity, or application health.
 
 ## Administrator-scoped prerequisites
 
-Precreate the provisioning identity and execution RG. For tight scoping,
+Precreate the provisioning identity; no execution RG is needed. For tight scoping,
 precreate the two deterministic solution RGs shown in the layout preview and
 grant the provisioning identity authority there. It cannot receive a grant at
 a nonexistent scope. Broader inherited authority requires explicit administrator
@@ -117,7 +120,7 @@ approval; the deployment never grants itself privileges or elevates the operator
 
 | Principal | Required authority |
 | --- | --- |
-| Operator | Contributor/resource deployment and read at solution, execution, and referenced resource scopes; identity read/assign at the provisioning and runtime UAMI scopes; topic inventory and vault grant reads used by preflight |
+| Operator | Contributor/resource deployment and read at solution and referenced resource scopes (and the execution RG only if overridden); identity read/assign at the provisioning and runtime UAMI scopes; topic inventory and vault grant reads used by preflight |
 | Provisioning UAMI | `Microsoft.Resources/deployments/*` at the solution RGs and selected existing vault RGs where nested access modules run; worker identity read/write in solution RGs and read at reused worker identity scopes, including other subscriptions; vault read/write for newly managed vaults and topic read/write for newly managed topics |
 | Provisioning UAMI | Role assignment read/write at the solution RGs (inherited by their eventual service resources) and selected RBAC vaults; restrict assignable roles/principal types with administrator conditions where supported |
 | Provisioning UAMI | Access-policy write at selected policy-based existing vaults; no key/secret-value access is needed by provisioning code |
@@ -127,6 +130,32 @@ actions; a separate Managed Identity Operator assignment is not inherently
 required. Actual deny assignments, custom roles, locks, policy, provider
 registration, ACI quota, and location restrictions still apply. Register
 Microsoft.ContainerInstance in addition to the normal solution providers.
+
+## Identities in another subscription: checklist and readiness report
+
+The identity ARM IDs carry their own subscription, so no extra parameter is needed.
+Complete these in order before the first run:
+
+1. **Same tenant.** Every identity's subscription must be in the deployment subscription's Microsoft Entra tenant.
+2. **Operator access.** The signed-in operator account (`az login`) must be able to read the identity subscription, and needs Managed Identity Operator (read + `Microsoft.ManagedIdentity/userAssignedIdentities/*/assign/action`) on the provisioning identity and on each reused worker identity. Contributor in the deployment subscription does not cover these.
+3. **Deployment subscription.** The operator needs Contributor-level rights. Register `Microsoft.ContainerInstance`, `Microsoft.ManagedIdentity`, and `Microsoft.App` (required for the Flex Consumption subnet delegation) there, along with the solution's usual providers. The readiness report checks all of them.
+4. **Provisioning identity grants.** An administrator grants the provisioning identity the roles in the table above at the deployment subscription, or at both solution groups after pre-creating them. The identity's own subscription is irrelevant to this step.
+5. **Run the preview** (no `-Apply`). Fix everything the readiness report lists, then rerun.
+
+Every run starts with a read-only readiness report. It checks all of the above
+together, prints the exact grants an administrator must create (with the
+provisioning identity's object ID), and stops before any change if anything blocks.
+Warnings mean a check could not be completed, usually missing read access; verify
+those manually.
+
+| Error | Meaning | Fix |
+| --- | --- | --- |
+| `Readiness check failed ... Cannot read subscription` | The operator account cannot see the identity's subscription | `az login` with the right account, or an administrator grants Reader there |
+| `Operator lacks ... assign/action` or `LinkedAuthorizationFailed` | The operator cannot attach the identity to the container | Assign Managed Identity Operator on that identity |
+| `Resource provider ... NotRegistered` or `MissingSubscriptionRegistration` | Provider not registered in the deployment subscription | `az provider register --namespace <name> --subscription <deployment subscription>` |
+| `no role assignment in subscription` | The provisioning identity has no grants there | Administrator grants it the table roles at the subscription or the solution groups |
+| `provisioningResourceGroupName ... does not exist` | The override points at a group in the deployment subscription that is missing | Remove the parameter, or create the group there. Do not use the identity's resource group name |
+| `cross-tenant identities are not supported` | The identity's subscription is in another tenant | Use an identity from the deployment tenant |
 
 Contributor in the deployment subscription does not grant identity read/assign
 in another subscription. Administrators must grant the operator those actions

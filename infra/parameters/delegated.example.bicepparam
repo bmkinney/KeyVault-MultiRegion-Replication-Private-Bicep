@@ -5,8 +5,10 @@ param primaryLocation = 'eastus'
 param secondaryLocation = 'centralus'
 param managePermissions = true
 param provisioningIdentityResourceId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/platform-identities/providers/Microsoft.ManagedIdentity/userAssignedIdentities/example-provisioner'
-param provisioningResourceGroupName = 'example-provisioning'
-param provisioningLocation = 'eastus'
+// The identity may be in another subscription of the same tenant. Leave the next two unset
+// to run in the primary solution group; set a group only if it exists in the deployment subscription.
+// param provisioningResourceGroupName = 'example-provisioning'
+// param provisioningLocation = 'eastus'
 param provisioningTimeoutSeconds = 1800
 
 // Empty IDs create workers/vaults/topics under the provisioning identity.

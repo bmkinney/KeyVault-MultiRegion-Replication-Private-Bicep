@@ -7,6 +7,7 @@ import hashlib
 import json
 import re
 import subprocess
+import sys
 import tempfile
 import time
 import zlib
@@ -17,6 +18,7 @@ from check_vault_integration import (
     azure_json, azure_text, existing_role_assignment_names, preflight, preflight_workers,
     prepare_parameters, validate_id,
 )
+from delegated_readiness import ReadinessError, check, grant_guide, provider_namespaces
 from preview_validation import validate_preview
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -201,7 +203,7 @@ class DelegatedDeployment:
         }
         encoded, digest = encode_payload(payload)
         job_parameters = arm_parameters({
-            "location": self.values.get("provisioningLocation", "eastus"),
+            "location": self.values.get("provisioningLocation", self.values.get("primaryLocation", "eastus")),
             "provisioningIdentityResourceId": self.provisioner_id,
             "runId": run_id, "payloadDigest": digest, "payload": encoded,
         })
@@ -243,6 +245,7 @@ class DelegatedDeployment:
                     ):
                         raise RuntimeError("Provisioning result was not confirmed by ARM")
                     self.completed.append(stage)
+                    self.delete_container(container)
                     return
                 self.sleep(min(5, max(0, deadline - self.clock())))
             raise TimeoutError(f"{stage}: provisioning completion deadline exceeded")
@@ -259,6 +262,15 @@ class DelegatedDeployment:
                 self.emit(f"{stage}: execution stop requested.")
             self.emit("Submitted ARM operations can still be running; inspect before retrying.")
             raise
+
+    def delete_container(self, container):
+        try:
+            self.stop(
+                "container", "delete", "--name", container, "--resource-group", self.execution_group,
+                "--subscription", self.subscription, "--yes",
+            )
+        except (RuntimeError, subprocess.TimeoutExpired, OSError) as error:
+            self.emit(f"Warning: could not delete completed container {container}: {error}")
 
     def privileged(self, source, values, group, stage):
         template, parameters = self.compile(source), arm_parameters(values)
@@ -314,12 +326,30 @@ class DelegatedDeployment:
             raise ValueError("Provisioning identity cannot be combined with managePermissions = false in the user file")
         self.provisioner_id = values["provisioningIdentityResourceId"]
         validate_id(self.provisioner_id, self.subscription, "Microsoft.ManagedIdentity/userAssignedIdentities")
+        # Optional override; empty selects the primary solution group once the layout stage resolves it.
         self.execution_group = values.get("provisioningResourceGroupName", "")
-        if not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,89}", self.execution_group) or self.execution_group.endswith("."):
-            raise ValueError("Provide the existing provisioningResourceGroupName using ASCII letters/digits/._-")
+        if self.execution_group and (
+            not re.fullmatch(r"[A-Za-z0-9_-][A-Za-z0-9._-]{0,89}", self.execution_group) or self.execution_group.endswith(".")
+        ):
+            raise ValueError("provisioningResourceGroupName must use ASCII letters/digits/._- or be omitted")
         if type(self.timeout) is not int or not 120 <= self.timeout <= 7200:
             raise ValueError("provisioningTimeoutSeconds must be between 120 and 7200")
-        self.query("group", "show", "--name", self.execution_group, "--subscription", self.subscription)
+        worker_ids = [values.get(f"{side}WorkerIdentityResourceId", "") for side in ("primary", "secondary")]
+        for worker_id in worker_ids:
+            if worker_id:
+                validate_id(worker_id, self.subscription, "Microsoft.ManagedIdentity/userAssignedIdentities")
+        blockers, warnings, principal = check(
+            subscription=self.subscription, provisioner_id=self.provisioner_id, worker_ids=worker_ids,
+            override_group=self.execution_group,
+            namespaces=provider_namespaces(self.compile("main.bicep"), self.compile("modules/provisioning-job.bicep")),
+            query=self.query,
+        )
+        for line in grant_guide(self.subscription, self.provisioner_id, principal, worker_ids):
+            self.emit(line)
+        for warning in warnings:
+            self.emit("Readiness warning: " + warning)
+        if blockers:
+            raise ReadinessError("Readiness check failed; nothing was changed:\n" + "\n".join("  - " + item for item in blockers))
         workload = values.get("workload", "mrkv")
         if not re.fullmatch(r"[a-z0-9]{3,8}", workload):
             raise ValueError("workload must be 3-8 lowercase letters/digits")
@@ -350,11 +380,17 @@ class DelegatedDeployment:
                 rf"/subscriptions/{re.escape(self.subscription)}/resourceGroups/rg-{workload}-([ps])-([a-z0-9]{{8}})",
                 resource_id, re.IGNORECASE,
             )
+            if not match and change["changeType"] == "Ignore" and re.match(
+                rf"/subscriptions/{re.escape(self.subscription)}/resourceGroups/rg-{workload}-[ps]-[a-z0-9]{{8}}/",
+                resource_id, re.IGNORECASE,
+            ):
+                continue  # Existing resources inside the solution groups, which the layout never manages.
             if not match or match[1] in groups:
                 raise ValueError("Layout preview must contain exactly the two deterministic solution groups")
             groups[match[1]] = (resource_id.split("/")[-1], match[2])
         if set(groups) != {"p", "s"} or groups["p"][1] != groups["s"][1]:
             raise ValueError("Could not resolve solution groups from the complete layout preview")
+        self.execution_group = self.execution_group or groups["p"][0]
         stamps = []
         for side, short in (("primary", "p"), ("secondary", "s")):
             group, token = groups[short]
@@ -438,6 +474,8 @@ class DelegatedDeployment:
         }}
         for flag in ("enableWorker", "enableEventRouting"):
             core["parameters"][flag] = {"value": False}
+        # Event Grid validates delivery grants when a subscription is created, so routes wait for the access stages.
+        core["parameters"]["deployEventRouting"] = {"value": False}
         infrastructure_changes, common = self.preview(self.compile("main.bicep"), core, "mrkv-infrastructure")
         if self.apply:
             self.create(common, "infrastructure-fenced")
@@ -465,6 +503,10 @@ class DelegatedDeployment:
                 "writerPrincipalId": workers[other["WorkerIdentity"].lower()]["principalId"],
                 "writerRoleId": writer_role, "existingRoleAssignmentNames": names,
             }, stamp["group"], stamp["side"] + "-access")
+        core["parameters"]["deployEventRouting"] = {"value": True}
+        _, common = self.preview(self.compile("main.bicep"), core, "mrkv-routing")
+        if self.apply:
+            self.create(common, "routing")
         if values.get("enableWorker") or values.get("enableEventRouting"):
             for flag in ("enableWorker", "enableEventRouting"):
                 core["parameters"][flag] = {"value": values.get(flag, False)}
@@ -483,7 +525,10 @@ def main():
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args()
     document = json.loads(Path(args.parameters).read_text(encoding="utf-8-sig"))
-    DelegatedDeployment(document, args.subscription, args.location, args.apply).run()
+    try:
+        DelegatedDeployment(document, args.subscription, args.location, args.apply).run()
+    except ReadinessError as error:
+        sys.exit(str(error))
 
 
 if __name__ == "__main__":

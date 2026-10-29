@@ -73,9 +73,10 @@ An empty ID still creates that worker when `managePermissions = true`.
 Both regional workers must use distinct identities. Reuse alone does not remove
 the caller's IAM-write requirements; use `managePermissions = false` and its
 administrator prerequisites for that.
-Alternatively, set `provisioningIdentityResourceId` and
-`provisioningResourceGroupName` in the delegated example to actively provision
-identities/grants through the precreated identity. Keep `managePermissions = true`
+Alternatively, set `provisioningIdentityResourceId` in the delegated example to
+actively provision identities/grants through the precreated identity (it may be in
+another subscription of the same tenant; `provisioningResourceGroupName` is an
+optional override and normally omitted). Keep `managePermissions = true`
 in that user file; the runner separates privileged and ordinary phases internally.
 Do not combine delegated and external-permissions mode or deploy `main.bicep`
 directly expecting its parameters to switch the ARM caller.
