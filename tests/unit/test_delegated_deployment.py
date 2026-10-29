@@ -363,6 +363,42 @@ class DelegatedTests(unittest.TestCase):
         after = [key for key, item in fake.resources.items() if "source" in item]
         self.assertEqual(sorted(after), sorted(topics))
 
+    def test_existing_workspace_in_another_subscription_is_validated_passed_on_and_probed(self):
+        fake = AzureDouble()
+        other = "22222222-2222-2222-2222-222222222222"
+        workspace = f"/subscriptions/{other}/resourceGroups/monitor/providers/Microsoft.OperationalInsights/workspaces/shared"
+        fake.resources[workspace] = {"id": workspace, "properties": {"provisioningState": "Succeeded"}}
+        fake.values["primaryLogAnalyticsWorkspaceResourceId"] = workspace
+        fake.values["secondaryLogAnalyticsWorkspaceResourceId"] = workspace
+        fake.denied = {workspace}
+        _, output = fake.run(apply=True)
+        core = next(values for stage, values in fake.contributor if stage == "main.bicep")
+        self.assertEqual(core["primaryLogAnalyticsWorkspaceResourceId"], workspace)
+        self.assertEqual(core["secondaryLogAnalyticsWorkspaceResourceId"], workspace)
+        self.assertIn("Operator may lack", output)
+        self.assertIn("reused workspace", output)
+        reads = [call for call in fake.calls if call[:2] == ("resource", "show") and call[3] == workspace]
+        self.assertTrue(reads)
+        self.assertTrue(all(call[call.index("--subscription") + 1] == other for call in reads))
+        self.assertNotIn("Readiness check failed", output)
+
+    def test_existing_workspace_in_another_tenant_is_a_readiness_blocker(self):
+        fake = AzureDouble()
+        other = "22222222-2222-2222-2222-222222222222"
+        workspace = f"/subscriptions/{other}/resourceGroups/monitor/providers/Microsoft.OperationalInsights/workspaces/shared"
+        fake.values["primaryLogAnalyticsWorkspaceResourceId"] = workspace
+        original = fake.query
+
+        def query(*arguments):
+            if arguments[:2] == ("account", "show") and arguments[arguments.index("--subscription") + 1] == other:
+                return {"tenantId": "ffffffff-ffff-ffff-ffff-ffffffffffff"}
+            return original(*arguments)
+
+        fake.query = query
+        with self.assertRaisesRegex(ValueError, "cross-tenant identities and workspaces"):
+            fake.run(apply=True)
+        self.assertEqual(fake.contributor, [])
+
     def test_cross_subscription_provisioner_needs_no_execution_group(self):
         fake = AzureDouble(new=True)
         del fake.values["provisioningResourceGroupName"]

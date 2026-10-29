@@ -16,7 +16,7 @@ from uuid import uuid4
 
 from check_vault_integration import (
     azure_json, azure_text, existing_role_assignment_names, preflight, preflight_workers,
-    prepare_parameters, validate_id,
+    preflight_workspaces, prepare_parameters, validate_id,
 )
 from delegated_readiness import ReadinessError, check, grant_guide, provider_namespaces
 from preview_validation import validate_preview
@@ -338,13 +338,19 @@ class DelegatedDeployment:
         for worker_id in worker_ids:
             if worker_id:
                 validate_id(worker_id, self.subscription, "Microsoft.ManagedIdentity/userAssignedIdentities")
+        workspace_ids = sorted({
+            item for item in (values.get(f"{side}LogAnalyticsWorkspaceResourceId", "") for side in ("primary", "secondary")) if item
+        }, key=str.lower)
+        for workspace_id in workspace_ids:
+            validate_id(workspace_id, self.subscription, "Microsoft.OperationalInsights/workspaces")
         blockers, warnings, principal = check(
             subscription=self.subscription, provisioner_id=self.provisioner_id, worker_ids=worker_ids,
+            workspace_ids=workspace_ids,
             override_group=self.execution_group,
             namespaces=provider_namespaces(self.compile("main.bicep"), self.compile("modules/provisioning-job.bicep")),
             query=self.query,
         )
-        for line in grant_guide(self.subscription, self.provisioner_id, principal, worker_ids):
+        for line in grant_guide(self.subscription, self.provisioner_id, principal, worker_ids, workspace_ids):
             self.emit(line)
         for warning in warnings:
             self.emit("Readiness warning: " + warning)
@@ -356,6 +362,7 @@ class DelegatedDeployment:
         original = self.document["parameters"]
         vaults = preflight(original, self.subscription, self.query)
         preflight_workers(original, self.subscription, vaults, self.query)
+        preflight_workspaces(original, self.subscription, self.query)
         provisioners = preflight_workers(
             arm_parameters({"primaryWorkerIdentityResourceId": self.provisioner_id})["parameters"],
             self.subscription, vaults, self.query,

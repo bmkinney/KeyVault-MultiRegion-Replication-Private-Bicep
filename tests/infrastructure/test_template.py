@@ -66,6 +66,31 @@ def selected_principal(identity_parameter, principal_parameter):
 
 
 class InfrastructureTests(unittest.TestCase):
+    def test_reused_workspace_is_optional_never_created_and_wired_everywhere(self):
+        for side in ("primary", "secondary"):
+            self.assertEqual(TEMPLATE["parameters"][f"{side}LogAnalyticsWorkspaceResourceId"]["defaultValue"], "")
+        self.assertTrue(TEMPLATE["parameters"]["linkExistingWorkspaceToPrivateLinkScope"]["defaultValue"])
+        workspaces = of_type("Microsoft.OperationalInsights/workspaces")
+        self.assertEqual(len(workspaces), 2)
+        for workspace in workspaces:
+            self.assertEqual(workspace["condition"], "[empty(parameters('existingWorkspaceResourceId'))]")
+        selected = "[variables('workspaceId')]"
+        links = [item for item in of_type("Microsoft.Insights/privateLinkScopes/scopedResources")
+                 if item["properties"]["linkedResourceId"] == selected]
+        self.assertEqual(len(links), 2)
+        for link in links:
+            self.assertEqual(
+                link["condition"],
+                "[or(empty(parameters('existingWorkspaceResourceId')), parameters('linkExistingWorkspaceToPrivateLinkScope'))]",
+            )
+        for insights in of_type("Microsoft.Insights/components"):
+            self.assertEqual(insights["properties"]["WorkspaceResourceId"], selected)
+        diagnostics = [item for item in of_type("Microsoft.Insights/diagnosticSettings") if "workspaceId" in item["properties"]]
+        self.assertGreaterEqual(len(diagnostics), 8)
+        for item in diagnostics:
+            # The function-app module receives the same selected ID through its foundation input.
+            self.assertIn(item["properties"]["workspaceId"], (selected, "[parameters('foundation').workspaceId]"))
+
     def test_existing_worker_ids_and_known_principals_are_wired_without_redeployment(self):
         self.assertTrue(TEMPLATE["parameters"]["managePermissions"]["defaultValue"])
         self.assertEqual(TEMPLATE["parameters"]["resolvedWorkerIdentities"]["defaultValue"], {})

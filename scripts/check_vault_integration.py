@@ -12,9 +12,12 @@ from uuid import UUID
 
 RESOURCE_ID = re.compile(
     r"^/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/"
-    r"(Microsoft\.KeyVault/vaults|Microsoft\.EventGrid/systemTopics|Microsoft\.ManagedIdentity/userAssignedIdentities)/([^/]+)$",
+    r"(Microsoft\.KeyVault/vaults|Microsoft\.EventGrid/systemTopics|Microsoft\.ManagedIdentity/userAssignedIdentities|Microsoft\.OperationalInsights/workspaces)/([^/]+)$",
     re.IGNORECASE,
 )
+WORKSPACE_KIND = "Microsoft.OperationalInsights/workspaces"
+# Referenced by ID only, so these may live in any subscription of the deployment tenant.
+CROSS_SUBSCRIPTION_KINDS = {"microsoft.managedidentity/userassignedidentities", WORKSPACE_KIND.lower()}
 SECRET_NAME = re.compile(r"^[A-Za-z0-9-]{1,127}$")
 
 
@@ -49,7 +52,7 @@ def validate_id(resource_id, subscription, kind):
     match = RESOURCE_ID.fullmatch(resource_id)
     if not match or match[3].lower() != kind.lower():
         raise ValueError(f"Expected a full {kind} ARM ID")
-    if kind.lower() == "microsoft.managedidentity/userassignedidentities":
+    if kind.lower() in CROSS_SUBSCRIPTION_KINDS:
         UUID(match[1])
     elif match[1].lower() != subscription.lower():
         raise ValueError("Existing resources must be in the deployment subscription")
@@ -219,6 +222,33 @@ def preflight_workers(parameters, subscription, vaults, query):
     return resolved
 
 
+def preflight_workspaces(parameters, subscription, query):
+    value = lambda name, default=None: parameters.get(name, {}).get("value", default)
+    workspace_ids = [value(f"{side}LogAnalyticsWorkspaceResourceId", "") for side in ("primary", "secondary")]
+    for workspace_id in workspace_ids:
+        if not isinstance(workspace_id, str):
+            raise ValueError("Log Analytics workspace resource IDs must be strings")
+    if not isinstance(value("linkExistingWorkspaceToPrivateLinkScope", True), bool):
+        raise ValueError("linkExistingWorkspaceToPrivateLinkScope must be a boolean")
+    unique = {item.lower(): item for item in workspace_ids if item}
+    if not unique:
+        return
+    deployment_tenant = query("account", "show", "--subscription", subscription)["tenantId"].lower()
+    for workspace_id in unique.values():
+        workspace_subscription = validate_id(workspace_id, subscription, WORKSPACE_KIND)[1]
+        if query("account", "show", "--subscription", workspace_subscription)["tenantId"].lower() != deployment_tenant:
+            raise ValueError("Existing Log Analytics workspace must be in the deployment tenant")
+        workspace = query(
+            "resource", "show", "--ids", workspace_id, "--subscription", workspace_subscription,
+            "--api-version", "2025-07-01",
+        )
+        if workspace.get("id", "").lower() != workspace_id.lower():
+            raise ValueError("Azure returned a different Log Analytics workspace resource ID")
+        if workspace.get("properties", {}).get("provisioningState") != "Succeeded":
+            raise ValueError("Existing Log Analytics workspace is not in a Succeeded state")
+        print(f"Existing Log Analytics workspace preflight passed: {workspace_id}")
+
+
 def existing_role_assignment_names(workload, subscription, query, known_identities=None, vault_scopes=None):
     known_identities = known_identities or {}
     identities = query("identity", "list", "--subscription", subscription) if len(known_identities) < 2 else []
@@ -265,6 +295,7 @@ def prepare_parameters(document, subscription, query=azure_json):
     parameters = prepared["parameters"]
     resolved = preflight(parameters, subscription, query)
     workers = preflight_workers(parameters, subscription, resolved, query)
+    preflight_workspaces(parameters, subscription, query)
     uses_rbac = any(vault["usesRbac"] for vault in resolved.values()) or any(
         not parameters.get(f"{side}VaultResourceId", {}).get("value", "")
         and parameters.get(f"{side}VaultAuthorizationModel", {}).get("value", "accessPolicy") == "rbac"
@@ -295,6 +326,7 @@ def main():
     else:
         vaults = preflight(document["parameters"], args.subscription)
         preflight_workers(document["parameters"], args.subscription, vaults, azure_json)
+        preflight_workspaces(document["parameters"], args.subscription, azure_json)
 
 
 if __name__ == "__main__":

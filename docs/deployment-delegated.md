@@ -24,6 +24,8 @@ Copy `infra\parameters\delegated.example.bicepparam` to the Git-ignored
 | `provisioningTimeoutSeconds` | Per-deployment/job deadline, 120-7,200 seconds; default 1,800 |
 | `managePermissions` | Keep `true`: grants are actively provisioned, but by the provisioning identity |
 | Worker/vault/topic IDs | Leave empty to create under the provisioning identity, or supply existing IDs to reference |
+| `primaryLogAnalyticsWorkspaceResourceId` / `secondaryLogAnalyticsWorkspaceResourceId` | Optional existing Log Analytics workspace per region, in any subscription of the deployment tenant (both may be the same workspace). Empty creates one per region; policies that block workspace creation require this |
+| `linkExistingWorkspaceToPrivateLinkScope` | Default `true`: a reused workspace is added to the regional private link scope. Set `false` only if its administrators manage private access |
 | `replicaWriterRoleResourceId` | Administrator-predefined restricted custom role; required if either selected vault uses RBAC |
 
 New vaults still default to access policies. Reused vaults preserve their detected

@@ -32,6 +32,10 @@ param replicaWriterIdentityResourceId string
 param zoneNames object
 @description('Existing system topic ARM ID; empty creates a dedicated topic if none exists.')
 param existingSystemTopicResourceId string = ''
+@description('Existing Log Analytics workspace ARM ID, in this tenant; empty creates a regional workspace. Its own settings are never changed.')
+param existingWorkspaceResourceId string = ''
+@description('Associate a reused workspace with this region private link scope. Created workspaces are always associated.')
+param linkExistingWorkspaceToPrivateLinkScope bool = true
 
 resource vnet 'Microsoft.Network/virtualNetworks@2025-05-01' = {
   name: 'vnet-${prefix}'
@@ -243,7 +247,7 @@ resource referencedTopic 'Microsoft.EventGrid/systemTopics@2025-02-15' existing 
 
 var selectedTopicId = empty(existingSystemTopicResourceId) ? topic.id : referencedTopic!.id
 
-resource workspace 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
+resource workspace 'Microsoft.OperationalInsights/workspaces@2025-07-01' = if (empty(existingWorkspaceResourceId)) {
   name: 'log-${prefix}'
   location: location
   tags: tags
@@ -260,6 +264,8 @@ resource workspace 'Microsoft.OperationalInsights/workspaces@2025-07-01' = {
   }
 }
 
+var workspaceId = empty(existingWorkspaceResourceId) ? workspace.id : existingWorkspaceResourceId
+
 resource insights 'Microsoft.Insights/components@2020-02-02' = {
   name: 'appi-${prefix}'
   location: location
@@ -267,7 +273,7 @@ resource insights 'Microsoft.Insights/components@2020-02-02' = {
   kind: 'web'
   properties: {
     Application_Type: 'web'
-    WorkspaceResourceId: workspace.id
+    WorkspaceResourceId: workspaceId
     DisableLocalAuth: true
     publicNetworkAccessForIngestion: 'Disabled'
     publicNetworkAccessForQuery: 'Disabled'
@@ -298,12 +304,12 @@ resource monitor 'Microsoft.Insights/privateLinkScopes@2023-06-01-preview' = {
   }
 }
 
-resource workspaceLink 'Microsoft.Insights/privateLinkScopes/scopedResources@2023-06-01-preview' = {
+resource workspaceLink 'Microsoft.Insights/privateLinkScopes/scopedResources@2023-06-01-preview' = if (empty(existingWorkspaceResourceId) || linkExistingWorkspaceToPrivateLinkScope) {
   parent: monitor
   name: 'workspace'
   properties: {
     kind: 'Resource'
-    linkedResourceId: workspace.id
+    linkedResourceId: workspaceId
   }
 }
 
@@ -400,7 +406,7 @@ resource vaultDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-prev
   name: 'workspace'
   scope: vault
   properties: {
-    workspaceId: workspace.id
+    workspaceId: workspaceId
     logs: [{ categoryGroup: 'allLogs', enabled: true }]
     metrics: [{ category: 'AllMetrics', enabled: true }]
   }
@@ -411,7 +417,7 @@ resource busDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-previe
   name: 'workspace'
   scope: bus
   properties: {
-    workspaceId: workspace.id
+    workspaceId: workspaceId
     logs: [{ categoryGroup: 'allLogs', enabled: true }]
     metrics: [{ category: 'AllMetrics', enabled: true }]
   }
@@ -421,7 +427,7 @@ resource topicDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-prev
   name: 'workspace'
   scope: topic
   properties: {
-    workspaceId: workspace.id
+    workspaceId: workspaceId
     logs: [{ categoryGroup: 'allLogs', enabled: true }]
   }
   dependsOn: [managedTopic]
@@ -431,7 +437,7 @@ resource blobDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-previ
   name: 'workspace'
   scope: blobs[index]
   properties: {
-    workspaceId: workspace.id
+    workspaceId: workspaceId
     logs: [{ categoryGroup: 'allLogs', enabled: true }]
     metrics: [{ category: 'Transaction', enabled: true }]
   }
@@ -465,7 +471,7 @@ output runtime object = {
   integrationSubnetId: '${vnet.id}/subnets/integration'
   endpointSubnetId: '${vnet.id}/subnets/endpoints'
   appDnsZoneId: resourceId('Microsoft.Network/privateDnsZones', zoneNames.app)
-  workspaceId: workspace.id
+  workspaceId: workspaceId
   insightsConnectionString: insights.properties.ConnectionString
   actionGroupId: actionGroup.id
 }

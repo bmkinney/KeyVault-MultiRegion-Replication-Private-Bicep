@@ -23,6 +23,15 @@ param primaryWorkerIdentityResourceId string = ''
 @description('Existing secondary worker user-assigned identity ARM ID in any subscription in this tenant; empty creates one in managed-permissions mode.')
 param secondaryWorkerIdentityResourceId string = ''
 
+@description('Existing Log Analytics workspace ARM ID for the primary region, in any subscription in this tenant; empty creates one. Never modified.')
+param primaryLogAnalyticsWorkspaceResourceId string = ''
+
+@description('Existing Log Analytics workspace ARM ID for the secondary region; may equal the primary value. Empty creates one.')
+param secondaryLogAnalyticsWorkspaceResourceId string = ''
+
+@description('Associate reused workspaces with the regional private link scopes. Disable only if workspace administrators manage private access themselves.')
+param linkExistingWorkspaceToPrivateLinkScope bool = true
+
 @description('Create role definitions, assignments, and vault policies. False leaves IAM to administrators and requires existing workers, vaults, and system topics.')
 param managePermissions bool = true
 
@@ -156,6 +165,7 @@ var stampInputs = [
     authorizationModel: primaryVaultAuthorizationModel
     topicId: primarySystemTopicResourceId
     workerId: primaryWorkerIdentityResourceId
+    workspaceId: primaryLogAnalyticsWorkspaceResourceId
   }
   {
     prefix: secondaryPrefix
@@ -165,6 +175,7 @@ var stampInputs = [
     authorizationModel: secondaryVaultAuthorizationModel
     topicId: secondarySystemTopicResourceId
     workerId: secondaryWorkerIdentityResourceId
+    workspaceId: secondaryLogAnalyticsWorkspaceResourceId
   }
 ]
 
@@ -191,7 +202,7 @@ var stamps = [for stamp in stampInputs: {
     integrationSubnetId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/virtualNetworks/subnets', 'vnet-${stamp.prefix}', 'integration')
     endpointSubnetId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/virtualNetworks/subnets', 'vnet-${stamp.prefix}', 'endpoints')
     appDnsZoneId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/privateDnsZones', zoneNames.app)
-    workspaceId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.OperationalInsights/workspaces', 'log-${stamp.prefix}')
+    workspaceId: empty(stamp.workspaceId) ? resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.OperationalInsights/workspaces', 'log-${stamp.prefix}') : stamp.workspaceId
     insightsId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Insights/components', 'appi-${stamp.prefix}')
     actionGroupId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Insights/actionGroups', 'ag-${stamp.prefix}')
   }
@@ -239,6 +250,8 @@ module primary './modules/foundation.bicep' = {
     replicaWriterPrincipalId: stamps[1].principalId
     replicaWriterIdentityResourceId: stamps[1].identityId
     existingSystemTopicResourceId: primarySystemTopicResourceId
+    existingWorkspaceResourceId: primaryLogAnalyticsWorkspaceResourceId
+    linkExistingWorkspaceToPrivateLinkScope: linkExistingWorkspaceToPrivateLinkScope
     zoneNames: zoneNames
   }
   dependsOn: [primaryIdentity, secondaryIdentity]
@@ -264,6 +277,8 @@ module secondary './modules/foundation.bicep' = {
     replicaWriterPrincipalId: stamps[0].principalId
     replicaWriterIdentityResourceId: stamps[0].identityId
     existingSystemTopicResourceId: secondarySystemTopicResourceId
+    existingWorkspaceResourceId: secondaryLogAnalyticsWorkspaceResourceId
+    linkExistingWorkspaceToPrivateLinkScope: linkExistingWorkspaceToPrivateLinkScope
     zoneNames: zoneNames
   }
   dependsOn: [primaryIdentity, secondaryIdentity]

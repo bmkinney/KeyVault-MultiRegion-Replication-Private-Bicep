@@ -80,6 +80,15 @@ optional override and normally omitted). Keep `managePermissions = true`
 in that user file; the runner separates privileged and ordinary phases internally.
 Do not combine delegated and external-permissions mode or deploy `main.bicep`
 directly expecting its parameters to switch the ARM caller.
+To reuse a Log Analytics workspace instead of creating one per region (for
+example when policy blocks workspace creation), set
+`primaryLogAnalyticsWorkspaceResourceId` and `secondaryLogAnalyticsWorkspaceResourceId`
+to full ARM IDs in the deployment tenant; both may name the same workspace. The
+runner reads each read-only, and the deployment never modifies the workspace
+itself. It still sends Application Insights data and resource diagnostics to it
+and, by default, adds it to the regional private link scope
+(`linkExistingWorkspaceToPrivateLinkScope = false` skips that). The operator needs
+Log Analytics Contributor (or equivalent) on the workspace.
 Set a real `alertEmail` before operational use. Do not commit personal recipients
 if your organization treats them as private information.
 

@@ -3,6 +3,7 @@
 import re
 
 ASSIGN_ACTION = "Microsoft.ManagedIdentity/userAssignedIdentities/*/assign/action"
+WORKSPACE_ACTION = "Microsoft.OperationalInsights/workspaces/sharedKeys/action"
 BASE_NAMESPACES = (
     "Microsoft.Authorization", "Microsoft.ContainerInstance", "Microsoft.ManagedIdentity", "Microsoft.Resources",
 )
@@ -55,13 +56,13 @@ def effective_permissions(query, scope):
     return query("rest", "--method", "get", "--url", url)["value"]
 
 
-def check(*, subscription, provisioner_id, worker_ids, override_group, namespaces, query):
+def check(*, subscription, provisioner_id, worker_ids, override_group, namespaces, query, workspace_ids=()):
     """Run every check so one report lists all gaps; returns (blockers, warnings, provisioner principal)."""
     blockers, warnings = [], []
     identities = [provisioner_id, *(worker for worker in worker_ids if worker)]
 
     tenants = {}
-    for item in sorted({subscription, *map(subscription_of, identities)}, key=str.lower):
+    for item in sorted({subscription, *map(subscription_of, identities), *map(subscription_of, workspace_ids)}, key=str.lower):
         try:
             tenants[item.lower()] = query("account", "show", "--subscription", item)["tenantId"].lower()
         except (RuntimeError, KeyError) as error:
@@ -73,7 +74,7 @@ def check(*, subscription, provisioner_id, worker_ids, override_group, namespace
     for item, tenant in tenants.items():
         if deployment_tenant and tenant != deployment_tenant:
             blockers.append(f"Subscription {item} is in tenant {tenant}, not deployment tenant {deployment_tenant}; "
-                            "cross-tenant identities are not supported.")
+                            "cross-tenant identities and workspaces are not supported.")
 
     for identity in identities:
         try:
@@ -82,6 +83,14 @@ def check(*, subscription, provisioner_id, worker_ids, override_group, namespace
                                 "Ask an administrator to assign Managed Identity Operator on that identity.")
         except (RuntimeError, KeyError, TypeError) as error:
             warnings.append(f"Could not verify the operator's assign permission on {identity}: {error}")
+
+    for workspace in workspace_ids:
+        try:
+            if not permits(effective_permissions(query, workspace), WORKSPACE_ACTION):
+                warnings.append(f"Operator may lack {WORKSPACE_ACTION} on {workspace}; diagnostics and "
+                                "Application Insights linking need it (Log Analytics Contributor).")
+        except (RuntimeError, KeyError, TypeError) as error:
+            warnings.append(f"Could not verify the operator's permissions on workspace {workspace}: {error}")
 
     try:
         granted = effective_permissions(query, f"/subscriptions/{subscription}")
@@ -138,12 +147,15 @@ def check(*, subscription, provisioner_id, worker_ids, override_group, namespace
     return blockers, warnings, principal
 
 
-def grant_guide(subscription, provisioner_id, principal, worker_ids):
+def grant_guide(subscription, provisioner_id, principal, worker_ids, workspace_ids=()):
     reused = [provisioner_id, *(worker for worker in worker_ids if worker)]
     return [
         "Administrator grants required (never granted automatically):",
         f"  Operator, subscription {subscription}: deployment rights (Contributor) for resource groups and deployments.",
         *(f"  Operator, {item}: Managed Identity Operator (read and assign)." for item in reused),
+        *(f"  Operator, reused workspace {item}: rights to send diagnostics, link Application Insights and alerts, and "
+          "join it to the private link scope (Log Analytics Contributor, or as your workspace administrator specifies)."
+          for item in workspace_ids),
         f"  Provisioning identity {principal or provisioner_id}, subscription {subscription} or both solution groups "
         "plus the resource group of any reused vault that needs a new system topic: "
         "Managed Identity Contributor, Key Vault Contributor, EventGrid Contributor, "

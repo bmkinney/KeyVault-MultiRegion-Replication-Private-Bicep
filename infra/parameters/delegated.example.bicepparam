@@ -19,6 +19,10 @@ param primaryVaultResourceId = ''
 param secondaryVaultResourceId = ''
 param primarySystemTopicResourceId = ''
 param secondarySystemTopicResourceId = ''
+// Reuse a Log Analytics workspace (any subscription of the same tenant) instead of creating one per
+// region, for example when policy blocks workspace creation. Both regions may share one workspace.
+// param primaryLogAnalyticsWorkspaceResourceId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/monitoring/providers/Microsoft.OperationalInsights/workspaces/shared'
+// param secondaryLogAnalyticsWorkspaceResourceId = '/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/monitoring/providers/Microsoft.OperationalInsights/workspaces/shared'
 param primaryVaultAuthorizationModel = 'accessPolicy'
 param secondaryVaultAuthorizationModel = 'accessPolicy'
 
