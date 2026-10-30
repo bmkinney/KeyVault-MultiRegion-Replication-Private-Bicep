@@ -145,7 +145,7 @@ scanner did not report a vault-authorization rule; its unchanged totals are not
 evidence that it evaluated access-policy defaults or runtime-selected branches.
 Exact assertions cover the compiled authorization expressions separately.
 Microsoft's RBAC recommendation and the vault-write self-grant risk of access
-policies are documented explicitly; the customer-requested default is not a
+policies are documented explicitly; the access-policy default is not a
 security-recommendation override for other deployments.
 
 Completion self-check: local compilation/regressions **PASS**; private networking,
@@ -274,7 +274,7 @@ vault authorization and runtime replication behavior are unchanged.
 | Actual generated ACI Python command | Syntax compiled and executed locally with Azure CLI calls doubled; selected-UAMI login, full Provider validation/what-if before create, completion marker, embedded helper source, and pre-login digest-tampering rejection |
 | Failure/preview exercises | No-mutation previews and each deferral boundary; scoped role inventory; overbroad/unassignable role rejection; foreign tenant/read-denial/name collision; owned rerun; bootstrap failure; ARM Failed/Canceled/deadlines; container timeout/restart/nonzero/result mismatch; original error preserved if stop fails; activation after authorization only |
 | PowerShell/dependencies/Portal | All scripts parse; `pip check` finds no broken requirements; Portal Function artifact remains identical to source compilation |
-| Plan/documentation/hygiene | JSON and local documentation file links valid; no customer environment identifiers/private-key markers in changed/new files; local parameters remain Git-ignored; `git diff --check` exit 0 |
+| Plan/documentation/hygiene | JSON and local documentation file links valid; no environment-specific identifiers/private-key markers in changed/new files; local parameters remain Git-ignored; `git diff --check` exit 0 |
 | Unsuppressed Checkov 3.3.22 across main and all four delegated stages | **64 passed, 14 failed, 0 skipped, 0 parsing errors; exit 1** |
 
 The scanner remains **not clean**. All failures are in main and are the same

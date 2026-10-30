@@ -15,12 +15,12 @@ Approved through interactive clarification on 2026-10-09.
 | Size | 100 secrets, 10 updates/minute | Bounded demo workload |
 | Provenance | Original implementation with attribution | No copying from an upstream clone without a license |
 | Existing vaults | Independent new/existing selection within the subscription | Preserve settings; scoped integration resources only |
-| Vault authorization (subsequent customer decision) | Access-policy default for managed vaults; per-vault RBAC opt-in; reused models detected/preserved | Accommodate policy-based customers and mixed pairs without automatic migration |
+| Vault authorization (later refinement) | Access-policy default for managed vaults; per-vault RBAC opt-in; reused models detected/preserved | Accommodate policy-based environments and mixed pairs without automatic migration |
 | Source selection for reused vaults | Explicit name allowlist/prefix or whole-vault opt-in | Avoid accidental copying from shared vaults |
 | Destination collisions | Reject unmanaged names unless replacement is explicitly approved | Preserve existing unrelated contents |
-| What-if wiring (subsequent customer decision) | Static module inputs, automatic read-only discovery, and a fail-closed complete-preview gate | Users edit only parameters; runtime module outputs must not hide downstream deployments |
-| Existing worker identities / Contributor operators (subsequent customer decision) | Optional existing UAMI IDs; external-permissions mode references prepared workers/vaults/topics and omits all IAM writes | Administrator-owned runtime grants without elevating deployment operators; default managed-permissions path retained |
-| Delegated provisioning (subsequent customer decision) | Contributor-triggered keyless ACI jobs use a supplied precreated provisioning UAMI for worker/principal-bearing bootstrap and scoped grants; ordinary infrastructure stays under Contributor | Active creation without user IAM-administrator roles, explicit staged previews/completion, no shared-key staging; identity attachment is privileged delegation rather than trigger-only isolation |
+| What-if wiring (later refinement) | Static module inputs, automatic read-only discovery, and a fail-closed complete-preview gate | Users edit only parameters; runtime module outputs must not hide downstream deployments |
+| Existing worker identities / Contributor operators (later refinement) | Optional existing UAMI IDs; external-permissions mode references prepared workers/vaults/topics and omits all IAM writes | Administrator-owned runtime grants without elevating deployment operators; default managed-permissions path retained |
+| Delegated provisioning (later refinement) | Contributor-triggered keyless ACI jobs use a supplied precreated provisioning UAMI for worker/principal-bearing bootstrap and scoped grants; ordinary infrastructure stays under Contributor | Active creation without user IAM-administrator roles, explicit staged previews/completion, no shared-key staging; identity attachment is privileged delegation rather than trigger-only isolation |
 
 ## Implementation refinements
 
@@ -42,7 +42,7 @@ Approved through interactive clarification on 2026-10-09.
   operations that this implementation does not need.
 - Microsoft supports both vault models but recommends RBAC for separation of
   duties. Under policies, vault-write principals can grant themselves data
-  access; the policy default is a customer-selected tradeoff, not a claim of
+  access; the policy default is a compatibility tradeoff, not a claim of
   stronger isolation. Source filtering is not an IAM boundary under either model.
 - Managed vaults include both worker policies from their first PUT; creating
   identities ahead of both foundations avoids cross-foundation dependencies and

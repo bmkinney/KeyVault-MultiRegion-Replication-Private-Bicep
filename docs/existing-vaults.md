@@ -108,7 +108,7 @@ mode that known metadata also avoids unresolved newly created principals when
 previewing an existing vault's additive policy update. Neither mode claims to
 validate effective runtime access from configuration alone.
 
-For a customer supplying a separate identity to create workers and grants, use
+If you supply a separate identity to create workers and grants, use
 [delegated provisioning](deployment-delegated.md), not external-permissions mode.
 Existing-vault selection/model preservation is unchanged; privileged vault
 policies/assignments execute under the provisioning identity after per-stage
@@ -116,7 +116,7 @@ previews. The provisioning identity must be distinct from the runtime workers.
 
 Microsoft supports both models but recommends RBAC for separation of duties:
 vault-write control lets principals grant themselves data permissions under
-access policies. Accepting the customer policy model does not remove that risk.
+access policies. Accepting the access-policy model does not remove that risk.
 See [official authorization references](references.md) and
 [managed-vault upgrade/ownership rules](deployment-bicep.md#vault-authorization).
 

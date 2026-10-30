@@ -6,7 +6,7 @@ local.settings.json
 .build/
 infra/**/*.json
 !infra/**/bicepconfig.json
-.azure/*.local.json
+.azure/
 infra/parameters/*.local.bicepparam
 *.zip
 .env

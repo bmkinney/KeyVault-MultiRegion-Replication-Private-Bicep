@@ -10,7 +10,7 @@ ARM as themselves; each Function uses its selected identity at runtime.
 
 ## Choose permission ownership
 
-If the customer wants a supplied identity to **create workers and assign grants**,
+If you want a supplied identity to **create workers and assign grants**,
 use [delegated provisioning](deployment-delegated.md) instead. This page describes
 the separate workflow where administrators have already prepared runtime grants.
 

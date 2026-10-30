@@ -153,7 +153,7 @@ resources when their conditions become false.
 
 Microsoft supports both models but recommends RBAC: principals with vault-write
 control, such as Contributor/Key Vault Contributor, can grant themselves data
-access on policy-based vaults. Review that privilege boundary with the customer.
+access on policy-based vaults. Review that privilege boundary with your security administrators.
 In managed-permissions mode the custom replica role is defined only when at least
 one selected vault uses RBAC; vault assignments are made only on RBAC vaults.
 External-permissions mode leaves every grant to administrators.

@@ -49,7 +49,7 @@ dependencies retained. No identity-bootstrap deployment, generated-ID parameter,
 or user template edit is needed.
 
 If diagnostics remain, retain their exact codes/resource paths and the complete
-JSON preview for investigation; remove customer identifiers before sharing.
+JSON preview for investigation; remove environment identifiers (tenant, subscription, and resource IDs) before sharing.
 There is no bypass switch. Unknown property values can still produce prediction
 noise, and local compilation/mocked tests do not prove a diagnostic-free live
 what-if in every subscription. Resolve the reported provider/analysis limitation

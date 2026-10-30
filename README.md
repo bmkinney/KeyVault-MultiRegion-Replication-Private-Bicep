@@ -53,8 +53,8 @@ The same notice is available in [DISCLAIMER.md](DISCLAIMER.md).
 New solution-managed vaults default to **Vault access policy**. RBAC is an
 independent opt-in for each vault; reused vaults keep their detected model,
 including mixed RBAC/access-policy pairs. Microsoft recommends RBAC for stronger
-separation of duties; this sample's policy default accommodates the customer use
-case. See [authorization and upgrade guidance](docs/deployment-bicep.md#vault-authorization).
+separation of duties; this sample's policy default accommodates environments
+that standardize on access policies. See [authorization and upgrade guidance](docs/deployment-bicep.md#vault-authorization).
 
 **Not every hop uses Private Link.** Event Grid push delivery uses a system-assigned
 identity and trusted-service exception on the Microsoft backbone. Event Grid

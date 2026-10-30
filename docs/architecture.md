@@ -125,7 +125,7 @@ does not need them.
 Reused vaults retain their detected model; policy/RBAC mixed pairs are supported.
 Microsoft supports both models but recommends RBAC for separation of duties.
 Vault-write principals can grant themselves data access under policies; this
-sample uses the customer-requested policy default rather than hiding that tradeoff.
+sample uses the access-policy default for compatibility rather than hiding that tradeoff.
 
 Worker identity permissions:
 
