@@ -8,10 +8,12 @@ param subnetId string
 param targetId string
 @description('Private Link subresource.')
 param groupId string
-@description('Private DNS zone IDs for this endpoint.')
+@description('Private DNS zone IDs for this endpoint. Empty entries are ignored; with none, no zone group is created and records are managed elsewhere (for example by Azure Policy).')
 param dnsZoneIds array
 @description('Resource tags.')
 param tags object
+
+var zoneIds = filter(dnsZoneIds, zoneId => !empty(zoneId))
 
 resource endpoint 'Microsoft.Network/privateEndpoints@2025-05-01' = {
   name: name
@@ -33,11 +35,11 @@ resource endpoint 'Microsoft.Network/privateEndpoints@2025-05-01' = {
   }
 }
 
-resource dns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2025-05-01' = {
+resource dns 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2025-05-01' = if (!empty(zoneIds)) {
   parent: endpoint
   name: 'default'
   properties: {
-    privateDnsZoneConfigs: [for (zoneId, index) in dnsZoneIds: {
+    privateDnsZoneConfigs: [for (zoneId, index) in zoneIds: {
       name: 'zone-${index}'
       properties: {
         privateDnsZoneId: zoneId

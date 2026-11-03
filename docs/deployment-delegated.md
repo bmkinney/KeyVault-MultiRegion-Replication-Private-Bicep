@@ -27,6 +27,7 @@ Copy `infra\parameters\delegated.example.bicepparam` to the Git-ignored
 | `primaryLogAnalyticsWorkspaceResourceId` / `secondaryLogAnalyticsWorkspaceResourceId` | Optional existing Log Analytics workspace per region, in any subscription of the deployment tenant (both may be the same workspace). Empty creates one per region; policies that block workspace creation require this |
 | `linkExistingWorkspaceToPrivateLinkScope` | Default `true`: a reused workspace is added to the regional private link scope. Set `false` only if its administrators manage private access |
 | `replicaWriterRoleResourceId` | Administrator-predefined restricted custom role; required if either selected vault uses RBAC |
+| `primaryNetworkMode` / `secondaryNetworkMode` | `new` (default) creates each regional VNet and private DNS zones. `existing` or `newSubnet` reuses your VNet, subnets, and DNS zones, so no new address space or firewall rules are needed. See [existing VNets](existing-networks.md); the Contributor operator needs subnet join and DNS zone join on them, and the provisioning identity needs nothing |
 
 New vaults still default to access policies. Reused vaults preserve their detected
 model; mixed pairs remain supported. Explicitly select secrets when reusing a
@@ -251,7 +252,7 @@ approval; the deployment never grants itself privileges or elevates the operator
 
 | Principal | Required authority |
 | --- | --- |
-| Operator | Contributor/resource deployment and read at solution and referenced resource scopes (and the execution RG only if overridden); identity read/assign at the provisioning and runtime UAMI scopes; topic inventory and vault grant reads used by preflight |
+| Operator | Contributor/resource deployment and read at solution and referenced resource scopes (and the execution RG only if overridden); identity read/assign at the provisioning and runtime UAMI scopes; topic inventory and vault grant reads used by preflight; VNet/subnet read, subnet join, and private DNS zone join on any [reused network](existing-networks.md) |
 | Provisioning UAMI | `Microsoft.Resources/deployments/*` at the solution RGs and selected existing vault RGs where nested access modules run, and where a new system topic must be created (Event Grid requires it in the vault's RG, with Event Grid write there); worker identity read/write in solution RGs and read at reused worker identity scopes, including other subscriptions; vault read/write for newly managed vaults and topic read/write for newly managed topics |
 | Provisioning UAMI | Role assignment read/write at the solution RGs (inherited by their eventual service resources) and selected RBAC vaults; restrict assignable roles/principal types with administrator conditions where supported |
 | Provisioning UAMI | Access-policy write at selected policy-based existing vaults; no key/secret-value access is needed by provisioning code |

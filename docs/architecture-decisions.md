@@ -21,6 +21,7 @@ Approved through interactive clarification on 2026-10-09.
 | What-if wiring (later refinement) | Static module inputs, automatic read-only discovery, and a fail-closed complete-preview gate | Users edit only parameters; runtime module outputs must not hide downstream deployments |
 | Existing worker identities / Contributor operators (later refinement) | Optional existing UAMI IDs; external-permissions mode references prepared workers/vaults/topics and omits all IAM writes | Administrator-owned runtime grants without elevating deployment operators; default managed-permissions path retained |
 | Delegated provisioning (later refinement) | Contributor-triggered keyless ACI jobs use a supplied precreated provisioning UAMI for worker/principal-bearing bootstrap and scoped grants; ordinary infrastructure stays under Contributor | Active creation without user IAM-administrator roles, explicit staged previews/completion, no shared-key staging; identity attachment is privileged delegation rather than trigger-only isolation |
+| Existing networks (later refinement) | Per-region `new` (default), `newSubnet`, or `existing` network mode; reused VNets/subnets/DNS zones are referenced, never redeployed; vault endpoints for reused vaults only when listed | Customers who cannot add address space or firewall rules; mirrors the Azure Files replication project; default behavior unchanged |
 
 ## Implementation refinements
 

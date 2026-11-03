@@ -32,6 +32,9 @@ The same notice is available in [DISCLAIMER.md](DISCLAIMER.md).
   and apply grants under that identity. Includes the
   [after-`-Apply` checklist](docs/deployment-delegated.md#after--apply-complete-and-test-the-deployment):
   verify, publish code, activate, wait for sync, and run acceptance tests.
+- [Reuse existing VNets and private DNS](docs/existing-networks.md): deploy into
+  existing regional VNets, subnets, and private DNS zones instead of creating
+  new address space, or migrate a deployment that already created its own VNets.
 - [Architecture and limitations](docs/architecture.md).
 - [Use existing Key Vaults](docs/existing-vaults.md): independent new/existing selection,
   source filters, preserved vault settings, and protected destination collisions.
@@ -48,7 +51,7 @@ The same notice is available in [DISCLAIMER.md](DISCLAIMER.md).
 | Authority | One writer at a time; manually fenced promotion/failback |
 | Replication | Selected current secret values/properties; unmanaged destination collisions rejected by default |
 | Recovery | Initial/periodic reconciliation every five minutes; retry-safe lineage |
-| Networking | Isolated VNets, local endpoints to both vaults, private storage/messaging/app access |
+| Networking | Isolated VNets by default, or [reused existing VNets and private DNS](docs/existing-networks.md); local endpoints to both vaults, private storage/messaging/app access |
 | Telemetry | Regional Log Analytics/Application Insights and private-only AMPLS |
 | Identity | Managed identities; vault access policies by default or per-vault RBAC; other services use RBAC; shared keys/local authentication disabled |
 

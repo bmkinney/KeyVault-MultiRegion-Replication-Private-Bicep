@@ -572,5 +572,96 @@ class InfrastructureTests(unittest.TestCase):
             self.assertIn("__mrkv_inactive__/", props["filter"]["subjectBeginsWith"])
 
 
+    def test_network_reuse_is_opt_in_and_the_default_still_creates_dedicated_vnets(self):
+        for side in ("primary", "secondary"):
+            mode = TEMPLATE["parameters"][f"{side}NetworkMode"]
+            self.assertEqual(mode["defaultValue"], "new")
+            self.assertEqual(mode["allowedValues"], ["new", "newSubnet", "existing"])
+            for name in ("VnetName", "VnetResourceGroupName", "IntegrationSubnetName", "IntegrationSubnetPrefix", "PrivateEndpointSubnetName"):
+                self.assertEqual(TEMPLATE["parameters"][f"{side}{name}"]["defaultValue"], "")
+            self.assertEqual(TEMPLATE["parameters"][f"{side}EndpointsToCreate"]["defaultValue"], [])
+            self.assertEqual(TEMPLATE["parameters"][f"{side}PrivateDnsZoneIds"]["defaultValue"], {})
+            foundation = deployment(f"{side}-foundation")
+            self.assertEqual(
+                foundation["properties"]["parameters"]["createNetwork"]["value"],
+                f"[equals(parameters('{side}NetworkMode'), 'new')]",
+            )
+            template = foundation["properties"]["template"]
+            networks = [item for item in template["resources"] if item["type"] == "Microsoft.Network/virtualNetworks"]
+            self.assertEqual([item.get("condition") for item in networks], ["[parameters('createNetwork')]"])
+            self.assertEqual(
+                template["variables"]["zoneList"],
+                "[if(parameters('createNetwork'), items(parameters('zoneNames')), createArray())]",
+            )
+
+    def test_existing_vnets_are_referenced_without_being_redeployed(self):
+        stamp = next(item for item in TEMPLATE["variables"]["copy"] if item["name"] == "stamps")["input"]
+        local = lambda expression: expression.replace("variables('stampInputs')[copyIndex('stamps')]", "stamp")
+        for reference in (stamp["endpointSubnetId"], stamp["runtime"]["integrationSubnetId"], stamp["runtime"]["endpointSubnetId"]):
+            self.assertIn("stamp.vnetGroupName", local(reference))
+            self.assertIn("'Microsoft.Network/virtualNetworks/subnets', stamp.vnetName", local(reference))
+        self.assertIn("equals(variables('stampInputs')[copyIndex('stamps')].networkMode, 'new')", stamp["zoneIds"])
+        self.assertIn("suppliedZoneIds", stamp["zoneIds"])
+        self.assertIn("tryGet(variables('stampInputs')[copyIndex('stamps')].suppliedZoneIds, 'app')", stamp["runtime"]["appDnsZoneId"])
+        # Reused VNets must never be redeclared; only the new-mode foundation owns a virtualNetworks resource.
+        for resource in resources(TEMPLATE):
+            if resource["type"] == "Microsoft.Network/virtualNetworks":
+                self.assertEqual(resource["condition"], "[parameters('createNetwork')]")
+
+    def test_new_subnet_mode_adds_only_the_delegated_integration_subnet_in_the_vnet_group(self):
+        for side in ("primary", "secondary"):
+            module = deployment(f"{side}-integration-subnet")
+            self.assertEqual(module["condition"], f"[equals(parameters('{side}NetworkMode'), 'newSubnet')]")
+            self.assertEqual(module["resourceGroup"], f"[parameters('{side}VnetResourceGroupName')]")
+            template = module["properties"]["template"]
+            subnets = [item for item in template["resources"] if item["type"] == "Microsoft.Network/virtualNetworks/subnets"]
+            self.assertEqual(len(subnets), 1)
+            self.assertEqual(
+                subnets[0]["properties"]["delegations"][0]["properties"]["serviceName"], "Microsoft.App/environments",
+            )
+            self.assertFalse([item for item in template["resources"] if item["type"] == "Microsoft.Network/virtualNetworks"])
+            app = deployment(f"{side}-worker")
+            self.assertIn(f"{side}-integration-subnet", json.dumps(app["dependsOn"]))
+
+    def test_network_inputs_are_validated_before_any_resource_changes(self):
+        self.assertEqual(
+            TEMPLATE["variables"]["validatedTags"],
+            "[if(empty(variables('inputErrors')), parameters('tags'), fail(join(variables('inputErrors'), ' ')))]",
+        )
+        groups = of_type("Microsoft.Resources/resourceGroups")
+        self.assertEqual(len(groups), 2)
+        for group in groups:
+            self.assertEqual(group["tags"], "[variables('validatedTags')]")
+        errors = json.dumps(TEMPLATE["variables"]["inputErrors"])
+        for message in ("NetworkMode is {1}, so set", "IntegrationSubnetName", "IntegrationSubnetPrefix",
+                        "PrivateEndpointSubnetName", "EndpointsToCreate accepts only", "PrivateDnsZoneIds must map"):
+            self.assertIn(message, errors)
+
+    def test_vault_endpoints_are_optional_only_for_reused_vaults_in_reused_networks(self):
+        owned = TEMPLATE["variables"]["primaryVaultIsSolutionOwned"]
+        self.assertIn("empty(parameters('primaryVaultResourceId'))", owned)
+        self.assertIn("'vault'", owned)
+        stamp_inputs = TEMPLATE["variables"]["stampInputs"]
+        for index, side in enumerate(("primary", "secondary")):
+            local = stamp_inputs[index]["createLocalVaultEndpoint"]
+            remote = stamp_inputs[index]["createRemoteVaultEndpoint"]
+            for expression, owner, role in (
+                (local, side, f"{side}Vault"),
+                (remote, "secondary" if side == "primary" else "primary", f"{'secondary' if side == 'primary' else 'primary'}Vault"),
+            ):
+                self.assertIn(f"equals(parameters('{side}NetworkMode'), 'new')", expression)
+                self.assertIn(f"variables('{owner}VaultIsSolutionOwned')", expression)
+                self.assertIn(f"contains(parameters('{side}EndpointsToCreate'), '{role}')", expression)
+        endpoints = {side: deployment(f"{side}-endpoints")["properties"]["parameters"] for side in ("primary", "secondary")}
+        self.assertEqual(endpoints["primary"]["createLocalVaultEndpoint"]["value"], "[variables('stamps')[0].createLocalVaultEndpoint]")
+        self.assertEqual(endpoints["secondary"]["createRemoteVaultEndpoint"]["value"], "[variables('stamps')[1].createRemoteVaultEndpoint]")
+
+    def test_private_endpoints_tolerate_policy_managed_dns(self):
+        zone_groups = of_type("Microsoft.Network/privateEndpoints/privateDnsZoneGroups")
+        self.assertTrue(zone_groups)
+        for group in zone_groups:
+            self.assertEqual(group["condition"], "[not(empty(variables('zoneIds')))]")
+
+
 if __name__ == "__main__":
     unittest.main()

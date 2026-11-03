@@ -97,6 +97,10 @@ Private endpoints live in the VNet's region even when the target vault is remote
 No regional peering is necessary for the replication data path. A local endpoint
 to a remote vault does not make that remote service available during its outage.
 
+The table shows the default `new` network mode. Either region can instead reuse
+an existing VNet, subnets, and private DNS zones; the endpoint topology is the
+same. See [reusing existing VNets](existing-networks.md).
+
 ## Paths and trust boundaries
 
 | Path | Networking | Identity |

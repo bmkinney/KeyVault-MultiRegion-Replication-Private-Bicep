@@ -52,7 +52,7 @@ param provisioningTimeoutSeconds int = 1800
 @description('Administrator-predefined restricted replica-writer role ARM ID. Required in delegated mode when either vault uses RBAC.')
 param replicaWriterRoleResourceId string = ''
 
-@description('Internal ownership flags refreshed by delegated orchestration for solution-created parent diagnostics.')
+@description('Internal ownership flags refreshed by delegated orchestration for solution-created parent diagnostics and vault endpoints.')
 param resolvedOwnedFoundationDiagnostics object = {}
 
 @description('Internal existing-worker identity metadata populated by Deploy.ps1; do not supply principal/client IDs manually.')
@@ -91,19 +91,77 @@ param replicateAllSecrets bool = empty(primaryVaultResourceId) && empty(secondar
 @description('Explicit approval to replace/disable unmanaged destination secrets within the selection.')
 param allowUnmanagedOverwrite bool = false
 
-@description('Primary VNet, integration subnet, and private endpoint subnet CIDRs.')
+@description('Primary VNet, integration subnet, and private endpoint subnet CIDRs. Used only when primaryNetworkMode is new.')
 param primaryNetwork object = {
   address: '10.35.0.0/16'
   integration: '10.35.1.0/24'
   endpoints: '10.35.0.0/24'
 }
 
-@description('Secondary VNet, integration subnet, and private endpoint subnet CIDRs.')
+@description('Secondary VNet, integration subnet, and private endpoint subnet CIDRs. Used only when secondaryNetworkMode is new.')
 param secondaryNetwork object = {
   address: '10.36.0.0/16'
   integration: '10.36.1.0/24'
   endpoints: '10.36.0.0/24'
 }
+
+@allowed([
+  'new'
+  'newSubnet'
+  'existing'
+])
+@description('new creates a dedicated VNet with its own private DNS zones. existing reuses primaryVnetName, its Function integration subnet, and its private endpoint subnet. newSubnet reuses the VNet and adds the delegated integration subnet.')
+param primaryNetworkMode string = 'new'
+
+@description('Existing primary VNet to reuse or extend, in the deployment subscription and the primary location.')
+param primaryVnetName string = ''
+
+@description('Resource group of the existing primary VNet.')
+param primaryVnetResourceGroupName string = ''
+
+@description('Existing empty subnet delegated to Microsoft.App/environments (/27 or larger), or the name of the subnet newSubnet mode creates (default snet-<workload>-integration).')
+param primaryIntegrationSubnetName string = ''
+
+@description('Address prefix of the integration subnet created in newSubnet mode: /27 or larger, inside the VNet, and unused by another subnet.')
+param primaryIntegrationSubnetPrefix string = ''
+
+@description('Existing undelegated subnet of the primary VNet that receives this deployment private endpoints.')
+param primaryPrivateEndpointSubnetName string = ''
+
+@description('Reused vaults that need a new private endpoint in the existing primary VNet: primaryVault and/or secondaryVault. Solution-created vaults always get endpoints. Omit a reused vault that already has an endpoint reachable from this VNet.')
+param primaryEndpointsToCreate array = []
+
+@description('Existing private DNS zone resource IDs for endpoints created in the existing primary VNet, keyed vault, bus, blob, queue, table, app, monitor, oms, ods, agent. Omit a key when policy or another process creates its records.')
+param primaryPrivateDnsZoneIds object = {}
+
+@allowed([
+  'new'
+  'newSubnet'
+  'existing'
+])
+@description('new creates a dedicated VNet with its own private DNS zones. existing reuses secondaryVnetName, its Function integration subnet, and its private endpoint subnet. newSubnet reuses the VNet and adds the delegated integration subnet.')
+param secondaryNetworkMode string = 'new'
+
+@description('Existing secondary VNet to reuse or extend, in the deployment subscription and the secondary location.')
+param secondaryVnetName string = ''
+
+@description('Resource group of the existing secondary VNet.')
+param secondaryVnetResourceGroupName string = ''
+
+@description('Existing empty subnet delegated to Microsoft.App/environments (/27 or larger), or the name of the subnet newSubnet mode creates (default snet-<workload>-integration).')
+param secondaryIntegrationSubnetName string = ''
+
+@description('Address prefix of the integration subnet created in newSubnet mode: /27 or larger, inside the VNet, and unused by another subnet.')
+param secondaryIntegrationSubnetPrefix string = ''
+
+@description('Existing undelegated subnet of the secondary VNet that receives this deployment private endpoints.')
+param secondaryPrivateEndpointSubnetName string = ''
+
+@description('Reused vaults that need a new private endpoint in the existing secondary VNet: primaryVault and/or secondaryVault. Solution-created vaults always get endpoints. Omit a reused vault that already has an endpoint reachable from this VNet.')
+param secondaryEndpointsToCreate array = []
+
+@description('Existing private DNS zone resource IDs for endpoints created in the existing secondary VNet, keyed vault, bus, blob, queue, table, app, monitor, oms, ods, agent. Omit a key when policy or another process creates its records.')
+param secondaryPrivateDnsZoneIds object = {}
 
 @description('Notification recipient. Empty creates alerts without email delivery; set before operational use.')
 param alertEmail string = ''
@@ -134,13 +192,13 @@ var secondaryPrefix = '${workload}-s-${token}'
 resource primaryGroup 'Microsoft.Resources/resourceGroups@2025-04-01' = {
   name: 'rg-${primaryPrefix}'
   location: primaryLocation
-  tags: tags
+  tags: validatedTags
 }
 
 resource secondaryGroup 'Microsoft.Resources/resourceGroups@2025-04-01' = {
   name: 'rg-${secondaryPrefix}'
   location: secondaryLocation
-  tags: tags
+  tags: validatedTags
 }
 
 var zoneNames = {
@@ -156,6 +214,10 @@ var zoneNames = {
   agent: 'privatelink.agentsvc.azure-automation.net'
 }
 
+// Solution-created vaults always get endpoints. Delegated runs reference the vaults they bootstrapped by ID, so ownership comes from the orchestrator.
+var primaryVaultIsSolutionOwned = empty(primaryVaultResourceId) || (resolvedOwnedFoundationDiagnostics.?primary.?vault ?? false)
+var secondaryVaultIsSolutionOwned = empty(secondaryVaultResourceId) || (resolvedOwnedFoundationDiagnostics.?secondary.?vault ?? false)
+
 var stampInputs = [
   {
     prefix: primaryPrefix
@@ -166,6 +228,14 @@ var stampInputs = [
     topicId: primarySystemTopicResourceId
     workerId: primaryWorkerIdentityResourceId
     workspaceId: primaryLogAnalyticsWorkspaceResourceId
+    networkMode: primaryNetworkMode
+    vnetName: primaryNetworkMode == 'new' ? 'vnet-${primaryPrefix}' : primaryVnetName
+    vnetGroupName: primaryNetworkMode == 'new' ? primaryGroup.name : primaryVnetResourceGroupName
+    integrationSubnetName: primaryNetworkMode == 'new' ? 'integration' : (empty(primaryIntegrationSubnetName) ? 'snet-${workload}-integration' : primaryIntegrationSubnetName)
+    endpointSubnetName: primaryNetworkMode == 'new' ? 'endpoints' : primaryPrivateEndpointSubnetName
+    suppliedZoneIds: primaryPrivateDnsZoneIds
+    createLocalVaultEndpoint: primaryNetworkMode == 'new' || primaryVaultIsSolutionOwned || contains(primaryEndpointsToCreate, 'primaryVault')
+    createRemoteVaultEndpoint: primaryNetworkMode == 'new' || secondaryVaultIsSolutionOwned || contains(primaryEndpointsToCreate, 'secondaryVault')
   }
   {
     prefix: secondaryPrefix
@@ -176,8 +246,51 @@ var stampInputs = [
     topicId: secondarySystemTopicResourceId
     workerId: secondaryWorkerIdentityResourceId
     workspaceId: secondaryLogAnalyticsWorkspaceResourceId
+    networkMode: secondaryNetworkMode
+    vnetName: secondaryNetworkMode == 'new' ? 'vnet-${secondaryPrefix}' : secondaryVnetName
+    vnetGroupName: secondaryNetworkMode == 'new' ? secondaryGroup.name : secondaryVnetResourceGroupName
+    integrationSubnetName: secondaryNetworkMode == 'new' ? 'integration' : (empty(secondaryIntegrationSubnetName) ? 'snet-${workload}-integration' : secondaryIntegrationSubnetName)
+    endpointSubnetName: secondaryNetworkMode == 'new' ? 'endpoints' : secondaryPrivateEndpointSubnetName
+    suppliedZoneIds: secondaryPrivateDnsZoneIds
+    createLocalVaultEndpoint: secondaryNetworkMode == 'new' || secondaryVaultIsSolutionOwned || contains(secondaryEndpointsToCreate, 'secondaryVault')
+    createRemoteVaultEndpoint: secondaryNetworkMode == 'new' || primaryVaultIsSolutionOwned || contains(secondaryEndpointsToCreate, 'primaryVault')
   }
 ]
+
+// Missing or malformed network inputs stop the deployment during validation, before any resource changes.
+var networkInputs = [
+  {
+    side: 'primary'
+    mode: primaryNetworkMode
+    vnetName: primaryVnetName
+    vnetGroupName: primaryVnetResourceGroupName
+    integrationSubnetName: primaryIntegrationSubnetName
+    integrationSubnetPrefix: primaryIntegrationSubnetPrefix
+    endpointSubnetName: primaryPrivateEndpointSubnetName
+    endpointsToCreate: primaryEndpointsToCreate
+    zoneIds: primaryPrivateDnsZoneIds
+  }
+  {
+    side: 'secondary'
+    mode: secondaryNetworkMode
+    vnetName: secondaryVnetName
+    vnetGroupName: secondaryVnetResourceGroupName
+    integrationSubnetName: secondaryIntegrationSubnetName
+    integrationSubnetPrefix: secondaryIntegrationSubnetPrefix
+    endpointSubnetName: secondaryPrivateEndpointSubnetName
+    endpointsToCreate: secondaryEndpointsToCreate
+    zoneIds: secondaryPrivateDnsZoneIds
+  }
+]
+var inputErrors = filter(flatten(map(networkInputs, net => [
+  net.mode != 'new' && (empty(net.vnetName) || empty(net.vnetGroupName)) ? '${net.side}NetworkMode is ${net.mode}, so set ${net.side}VnetName and ${net.side}VnetResourceGroupName.' : ''
+  net.mode == 'existing' && empty(net.integrationSubnetName) ? '${net.side}NetworkMode is existing, so set ${net.side}IntegrationSubnetName.' : ''
+  net.mode == 'newSubnet' && empty(net.integrationSubnetPrefix) ? '${net.side}NetworkMode is newSubnet, so set ${net.side}IntegrationSubnetPrefix.' : ''
+  net.mode != 'new' && empty(net.endpointSubnetName) ? 'This deployment creates private endpoints in the existing ${net.side} VNet, so set ${net.side}PrivateEndpointSubnetName.' : ''
+  !empty(filter(net.endpointsToCreate, item => !contains(['primaryVault', 'secondaryVault'], item))) ? '${net.side}EndpointsToCreate accepts only primaryVault and secondaryVault.' : ''
+  !empty(filter(items(net.zoneIds), zone => !empty(zone.value) && !(startsWith(string(zone.value), '/subscriptions/') && endsWith(toLower(string(zone.value)), toLower('/privateDnsZones/${zoneNames[?zone.key] ?? 'unknown'}'))))) ? '${net.side}PrivateDnsZoneIds must map vault, bus, blob, queue, table, app, monitor, oms, ods, or agent to the resource ID of the matching privatelink zone.' : ''
+])), inputError => !empty(inputError))
+var validatedTags = empty(inputErrors) ? tags : fail(join(inputErrors, ' '))
 
 var stamps = [for stamp in stampInputs: {
   identityId: empty(stamp.workerId) ? resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.ManagedIdentity/userAssignedIdentities', 'id-${stamp.prefix}-worker') : stamp.workerId
@@ -192,16 +305,18 @@ var stamps = [for stamp in stampInputs: {
   storageId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Storage/storageAccounts', 'st${stamp.storageToken}run')
   deadletterStorageId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Storage/storageAccounts', 'st${stamp.storageToken}dl')
   monitorScopeId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Insights/privateLinkScopes', 'ampls-${stamp.prefix}')
-  endpointSubnetId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/virtualNetworks/subnets', 'vnet-${stamp.prefix}', 'endpoints')
-  zoneIds: toObject(items(zoneNames), zone => zone.key, zone => resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/privateDnsZones', zone.value))
+  endpointSubnetId: resourceId(subscription().subscriptionId, stamp.vnetGroupName, 'Microsoft.Network/virtualNetworks/subnets', stamp.vnetName, stamp.endpointSubnetName)
+  zoneIds: stamp.networkMode == 'new' ? toObject(items(zoneNames), zone => zone.key, zone => resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/privateDnsZones', zone.value)) : stamp.suppliedZoneIds
+  createLocalVaultEndpoint: stamp.createLocalVaultEndpoint
+  createRemoteVaultEndpoint: stamp.createRemoteVaultEndpoint
   runtime: {
     identityId: empty(stamp.workerId) ? resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.ManagedIdentity/userAssignedIdentities', 'id-${stamp.prefix}-worker') : stamp.workerId
     storageName: 'st${stamp.storageToken}run'
     storageBlobUri: 'https://st${stamp.storageToken}run.blob.${environment().suffixes.storage}/'
     busNamespace: 'sb-${stamp.prefix}.servicebus.windows.net'
-    integrationSubnetId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/virtualNetworks/subnets', 'vnet-${stamp.prefix}', 'integration')
-    endpointSubnetId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/virtualNetworks/subnets', 'vnet-${stamp.prefix}', 'endpoints')
-    appDnsZoneId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/privateDnsZones', zoneNames.app)
+    integrationSubnetId: resourceId(subscription().subscriptionId, stamp.vnetGroupName, 'Microsoft.Network/virtualNetworks/subnets', stamp.vnetName, stamp.integrationSubnetName)
+    endpointSubnetId: resourceId(subscription().subscriptionId, stamp.vnetGroupName, 'Microsoft.Network/virtualNetworks/subnets', stamp.vnetName, stamp.endpointSubnetName)
+    appDnsZoneId: stamp.networkMode == 'new' ? resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Network/privateDnsZones', zoneNames.app) : (stamp.suppliedZoneIds.?app ?? '')
     workspaceId: empty(stamp.workspaceId) ? resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.OperationalInsights/workspaces', 'log-${stamp.prefix}') : stamp.workspaceId
     insightsId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Insights/components', 'appi-${stamp.prefix}')
     actionGroupId: resourceId(subscription().subscriptionId, stamp.groupName, 'Microsoft.Insights/actionGroups', 'ag-${stamp.prefix}')
@@ -230,6 +345,26 @@ module secondaryIdentity './modules/worker-identity.bicep' = if (managePermissio
   }
 }
 
+module primaryIntegrationSubnet './modules/integration-subnet.bicep' = if (primaryNetworkMode == 'newSubnet') {
+  name: 'primary-integration-subnet'
+  scope: resourceGroup(primaryVnetResourceGroupName)
+  params: {
+    vnetName: primaryVnetName
+    subnetName: stampInputs[0].integrationSubnetName
+    addressPrefix: primaryIntegrationSubnetPrefix
+  }
+}
+
+module secondaryIntegrationSubnet './modules/integration-subnet.bicep' = if (secondaryNetworkMode == 'newSubnet') {
+  name: 'secondary-integration-subnet'
+  scope: resourceGroup(secondaryVnetResourceGroupName)
+  params: {
+    vnetName: secondaryVnetName
+    subnetName: stampInputs[1].integrationSubnetName
+    addressPrefix: secondaryIntegrationSubnetPrefix
+  }
+}
+
 module primary './modules/foundation.bicep' = {
   name: 'primary-foundation'
   scope: primaryGroup
@@ -238,6 +373,7 @@ module primary './modules/foundation.bicep' = {
     storageToken: '${workload}p${token}'
     location: primaryLocation
     network: primaryNetwork
+    createNetwork: primaryNetworkMode == 'new'
     alertEmail: alertEmail
     tags: tags
     existingVaultResourceId: primaryVaultResourceId
@@ -265,6 +401,7 @@ module secondary './modules/foundation.bicep' = {
     storageToken: '${workload}s${token}'
     location: secondaryLocation
     network: secondaryNetwork
+    createNetwork: secondaryNetworkMode == 'new'
     alertEmail: alertEmail
     tags: tags
     existingVaultResourceId: secondaryVaultResourceId
@@ -338,7 +475,9 @@ module primaryEndpoints './modules/endpoints.bicep' = {
     subnetId: stamps[0].endpointSubnetId
     zoneIds: stamps[0].zoneIds
     localVaultId: stamps[0].vaultId
+    createLocalVaultEndpoint: stamps[0].createLocalVaultEndpoint
     remoteVaultId: stamps[1].vaultId
+    createRemoteVaultEndpoint: stamps[0].createRemoteVaultEndpoint
     storageId: stamps[0].storageId
     deadletterStorageId: stamps[0].deadletterStorageId
     serviceBusId: resourceId(subscription().subscriptionId, primaryGroup.name, 'Microsoft.ServiceBus/namespaces', 'sb-${primaryPrefix}')
@@ -357,7 +496,9 @@ module secondaryEndpoints './modules/endpoints.bicep' = {
     subnetId: stamps[1].endpointSubnetId
     zoneIds: stamps[1].zoneIds
     localVaultId: stamps[1].vaultId
+    createLocalVaultEndpoint: stamps[1].createLocalVaultEndpoint
     remoteVaultId: stamps[0].vaultId
+    createRemoteVaultEndpoint: stamps[1].createRemoteVaultEndpoint
     storageId: stamps[1].storageId
     deadletterStorageId: stamps[1].deadletterStorageId
     serviceBusId: resourceId(subscription().subscriptionId, secondaryGroup.name, 'Microsoft.ServiceBus/namespaces', 'sb-${secondaryPrefix}')
@@ -387,6 +528,7 @@ module primaryApp './modules/function-app.bicep' = {
   }
   dependsOn: [
     primaryEndpoints
+    primaryIntegrationSubnet
     primaryVaultAccess
     secondaryVaultAccess
   ]
@@ -412,6 +554,7 @@ module secondaryApp './modules/function-app.bicep' = {
   }
   dependsOn: [
     secondaryEndpoints
+    secondaryIntegrationSubnet
     primaryVaultAccess
     secondaryVaultAccess
   ]

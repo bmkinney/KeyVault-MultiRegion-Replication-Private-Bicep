@@ -40,6 +40,10 @@ function az {
 function python {
     Record-Call 'python' $args
     $global:LASTEXITCODE = 0
+    if ($args[0] -like '*migrate_network.py') {
+        if ($env:TEST_FAILURE -eq 'migrate') { $global:LASTEXITCODE = 1 }
+        return
+    }
     if ($args[0] -like '*deploy_delegated.py') {
         if ($env:TEST_FAILURE -eq 'delegated') { $global:LASTEXITCODE = 1 }
         return
@@ -53,9 +57,12 @@ function python {
     $prepared.parameters | Add-Member -NotePropertyName resolvedWorkerIdentities -NotePropertyValue @{ value = @{} }
     $prepared | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $args[$index + 1]
 }
+$extra = @{}
+if ($env:TEST_MIGRATE -eq '1') { $extra.MigrateNetwork = $true }
+if ($env:TEST_FENCE -eq '1') { $extra.FenceWorkers = $true }
 try {
     & $env:TEST_SCRIPT -SubscriptionId '00000000-0000-0000-0000-000000000000' `
-        -ParametersFile $env:TEST_USER_PARAMETERS -Apply:($env:TEST_APPLY -eq '1')
+        -ParametersFile $env:TEST_USER_PARAMETERS -Apply:($env:TEST_APPLY -eq '1') @extra
 } catch {
     Write-Output $_.Exception.Message
     exit 1
@@ -65,7 +72,7 @@ try {
 
 @unittest.skipUnless(shutil.which("pwsh"), "PowerShell 7 is required for deployment runner tests")
 class DeploymentRunnerTests(unittest.TestCase):
-    def run_preview(self, preview, *, apply=True, failure="", version="2.91.0", delegated=False):
+    def run_preview(self, preview, *, apply=True, failure="", version="2.91.0", delegated=False, migrate=False, fence=False):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             temp = root / "temporary"
@@ -85,6 +92,7 @@ class DeploymentRunnerTests(unittest.TestCase):
                 "TEST_PARAMETERS": str(parameters), "TEST_PREVIEW": str(result),
                 "TEST_LOG": str(log), "TEST_CREATED": str(created),
                 "TEST_FAILURE": failure, "TEST_CLI_VERSION": version, "TEST_APPLY": "1" if apply else "0",
+                "TEST_MIGRATE": "1" if migrate else "0", "TEST_FENCE": "1" if fence else "0",
             }
             completed = subprocess.run(
                 [shutil.which("pwsh"), "-NoProfile", "-NonInteractive", "-File", str(wrapper)],
@@ -137,6 +145,27 @@ class DeploymentRunnerTests(unittest.TestCase):
         result, _, _ = self.run_preview({}, delegated=True, failure="delegated")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("partially completed", result.stdout)
+
+    def test_network_migration_routes_only_to_the_migration_script(self):
+        for apply, fence in ((False, False), (True, False), (True, True)):
+            with self.subTest(apply=apply, fence=fence):
+                result, calls, created = self.run_preview({}, apply=apply, migrate=True, fence=fence)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertFalse(created)
+                python = [call for call in calls if call["tool"] == "python"]
+                self.assertEqual(len(python), 1)
+                arguments = python[0]["arguments"]
+                self.assertTrue(arguments[0].endswith("migrate_network.py"))
+                self.assertEqual("--apply" in arguments, apply)
+                self.assertEqual("--fence-workers" in arguments, fence)
+                self.assertFalse(any(call["arguments"][:1] == ["deployment"] for call in calls))
+        result, _, _ = self.run_preview({}, migrate=True, failure="migrate")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("Network migration failed", result.stdout)
+        result, calls, _ = self.run_preview({}, fence=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("-FenceWorkers applies only with -MigrateNetwork", result.stdout)
+        self.assertEqual(calls, [])
 
     def test_incomplete_and_invalid_previews_never_create(self):
         valid = {"status": "Succeeded", "changes": [CHANGE]}

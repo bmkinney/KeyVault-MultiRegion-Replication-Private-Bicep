@@ -3,9 +3,12 @@ param(
     [Parameter(Mandatory)][string]$SubscriptionId,
     [string]$ParametersFile = "$PSScriptRoot\..\infra\parameters\example.bicepparam",
     [string]$DeploymentLocation = 'eastus',
-    [switch]$Apply
+    [switch]$Apply,
+    [switch]$MigrateNetwork,
+    [switch]$FenceWorkers
 )
 $ErrorActionPreference = 'Stop'
+if ($FenceWorkers -and -not $MigrateNetwork) { throw '-FenceWorkers applies only with -MigrateNetwork.' }
 Get-Command az -ErrorAction Stop | Out-Null
 Get-Command python -ErrorAction Stop | Out-Null
 $CliVersionJson = & az version --output json --only-show-errors
@@ -25,6 +28,16 @@ try {
     & az bicep build-params --file $ParametersFile --outfile $CompiledParameters --only-show-errors
     if ($LASTEXITCODE -ne 0) { throw 'Parameter compilation failed; no deployment attempted.' }
     $UserParameters = Get-Content -LiteralPath $CompiledParameters -Raw | ConvertFrom-Json
+    if ($MigrateNetwork) {
+        $MigrationArguments = @(
+            "$PSScriptRoot\migrate_network.py", '--parameters', $CompiledParameters, '--subscription', $SubscriptionId
+        )
+        if ($Apply) { $MigrationArguments += '--apply' }
+        if ($FenceWorkers) { $MigrationArguments += '--fence-workers' }
+        & python @MigrationArguments
+        if ($LASTEXITCODE -ne 0) { throw 'Network migration failed or partially completed. Review the output before retrying.' }
+        return
+    }
     if ($UserParameters.parameters.provisioningIdentityResourceId.value) {
         $DelegatedArguments = @(
             "$PSScriptRoot\deploy_delegated.py", '--parameters', $CompiledParameters,

@@ -40,7 +40,9 @@ Select a subscription and check:
   the privileged templates with that identity. This mode needs CLI 2.76.0+,
   Microsoft.ContainerInstance, approved execution capacity, and administrator-scoped
   permissions prepared in advance.
-- Nonoverlapping CIDRs with the deployment network.
+- Nonoverlapping CIDRs with the deployment network, or reused existing VNets and
+  private DNS zones when new address space or firewall rules are not allowed
+  ([existing VNets](existing-networks.md)).
 - Global name availability for vault, storage, namespace, and app names.
 - Operator private access to both monitoring DNS views. Do not merge two AMPLS
   DNS views into a common resolver without redesign.
@@ -91,6 +93,11 @@ and, by default, adds it to the regional private link scope
 Log Analytics Contributor (or equivalent) on the workspace.
 Set a real `alertEmail` before operational use. Do not commit personal recipients
 if your organization treats them as private information.
+To deploy into existing regional VNets and private DNS zones instead of creating
+new ones, set `primaryNetworkMode` and `secondaryNetworkMode` (`existing` or
+`newSubnet`) and the related VNet, subnet, and DNS zone parameters described in
+[reusing existing VNets](existing-networks.md). `Deploy.ps1` reads those networks
+read-only before it changes anything.
 
 Keep:
 

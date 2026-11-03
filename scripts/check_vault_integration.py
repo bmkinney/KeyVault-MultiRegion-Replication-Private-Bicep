@@ -2,6 +2,7 @@
 
 import argparse
 import copy
+import ipaddress
 import json
 import re
 import shutil
@@ -19,6 +20,29 @@ WORKSPACE_KIND = "Microsoft.OperationalInsights/workspaces"
 # Referenced by ID only, so these may live in any subscription of the deployment tenant.
 CROSS_SUBSCRIPTION_KINDS = {"microsoft.managedidentity/userassignedidentities", WORKSPACE_KIND.lower()}
 SECRET_NAME = re.compile(r"^[A-Za-z0-9-]{1,127}$")
+SAFE_NAME = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9._()-]{0,89}$")
+NETWORK_MODES = ("new", "newSubnet", "existing")
+ENDPOINT_VAULTS = ("primaryVault", "secondaryVault")
+FLEX_DELEGATION = "microsoft.app/environments"
+# Flex Consumption needs a /27 or larger; the portal and ARM reject smaller delegated subnets.
+MIN_INTEGRATION_PREFIX = 27
+DNS_ZONE_ID = re.compile(
+    r"^/subscriptions/([^/]+)/resourceGroups/([^/]+)/providers/Microsoft\.Network/privateDnsZones/([^/]+)$",
+    re.IGNORECASE,
+)
+# Storage zone suffixes depend on the cloud, so those names are matched by service prefix.
+DNS_ZONE_NAMES = {
+    "vault": r"privatelink\.vaultcore\.azure\.net",
+    "bus": r"privatelink\.servicebus\.windows\.net",
+    "blob": r"privatelink\.blob\..+",
+    "queue": r"privatelink\.queue\..+",
+    "table": r"privatelink\.table\..+",
+    "app": r"privatelink\.azurewebsites\.net",
+    "monitor": r"privatelink\.monitor\.azure\.com",
+    "oms": r"privatelink\.oms\.opinsights\.azure\.com",
+    "ods": r"privatelink\.ods\.opinsights\.azure\.com",
+    "agent": r"privatelink\.agentsvc\.azure-automation\.net",
+}
 
 
 def authorization_model(properties):
@@ -249,6 +273,134 @@ def preflight_workspaces(parameters, subscription, query):
         print(f"Existing Log Analytics workspace preflight passed: {workspace_id}")
 
 
+def location_key(value):
+    return re.sub(r"\s", "", value).lower()
+
+
+def subnet_networks(properties):
+    prefixes = ([properties["addressPrefix"]] if properties.get("addressPrefix") else []) + list(properties.get("addressPrefixes") or [])
+    return [network for network in (ipaddress.ip_network(item) for item in prefixes) if network.version == 4]
+
+
+def delegation_names(subnet):
+    return sorted(
+        item.get("properties", {}).get("serviceName", "").lower() for item in subnet.get("properties", {}).get("delegations") or []
+    )
+
+
+def preflight_networks(parameters, subscription, query):
+    value = lambda name, default=None: parameters.get(name, {}).get("value", default)
+    workload = value("workload", "mrkv")
+    checked_zones = set()
+    for side, default_location in (("primary", "eastus"), ("secondary", "centralus")):
+        mode = value(f"{side}NetworkMode", "new")
+        if mode not in NETWORK_MODES:
+            raise ValueError(f"{side}NetworkMode must be one of: {', '.join(NETWORK_MODES)}")
+        if mode == "new":
+            continue
+
+        def text(suffix):
+            item = value(f"{side}{suffix}", "")
+            if not isinstance(item, str):
+                raise ValueError(f"{side}{suffix} must be a string")
+            return item
+
+        vnet_name, vnet_group = text("VnetName"), text("VnetResourceGroupName")
+        if not vnet_name or not vnet_group:
+            raise ValueError(f"{side}NetworkMode is {mode}, so set {side}VnetName and {side}VnetResourceGroupName")
+        integration, endpoint, prefix = text("IntegrationSubnetName"), text("PrivateEndpointSubnetName"), text("IntegrationSubnetPrefix")
+        if mode == "existing" and not integration:
+            raise ValueError(f"{side}NetworkMode is existing, so set {side}IntegrationSubnetName")
+        if mode == "newSubnet" and not prefix:
+            raise ValueError(f"{side}NetworkMode is newSubnet, so set {side}IntegrationSubnetPrefix")
+        if not endpoint:
+            raise ValueError(f"This deployment creates private endpoints in the existing {side} VNet, so set {side}PrivateEndpointSubnetName")
+        integration = integration or f"snet-{workload}-integration"
+        for name in (vnet_name, vnet_group, integration, endpoint):
+            if not SAFE_NAME.fullmatch(name):
+                raise ValueError(f"Invalid {side} network resource name: {name}")
+        if integration.lower() == endpoint.lower():
+            raise ValueError(f"The {side} integration and private endpoint subnets must be different subnets")
+        to_create = value(f"{side}EndpointsToCreate", [])
+        if not isinstance(to_create, list) or any(item not in ENDPOINT_VAULTS for item in to_create):
+            raise ValueError(f"{side}EndpointsToCreate accepts only: {', '.join(ENDPOINT_VAULTS)}")
+        zones = value(f"{side}PrivateDnsZoneIds", {})
+        if not isinstance(zones, dict):
+            raise ValueError(f"{side}PrivateDnsZoneIds must be an object")
+        zone_ids = []
+        for key, zone_id in zones.items():
+            if key not in DNS_ZONE_NAMES:
+                raise ValueError(f"{side}PrivateDnsZoneIds key {key} is not one of: {', '.join(DNS_ZONE_NAMES)}")
+            if not isinstance(zone_id, str):
+                raise ValueError(f"{side}PrivateDnsZoneIds.{key} must be a string")
+            if not zone_id:
+                continue
+            match = DNS_ZONE_ID.fullmatch(zone_id)
+            if not match or not re.fullmatch(DNS_ZONE_NAMES[key], match[3], re.IGNORECASE):
+                raise ValueError(f"{side}PrivateDnsZoneIds.{key} must be the resource ID of the matching privatelink private DNS zone for {key}")
+            UUID(match[1])
+            zone_ids.append((zone_id, match[1]))
+
+        location = value(f"{side}Location", default_location)
+        vnet_id = f"/subscriptions/{subscription}/resourceGroups/{vnet_group}/providers/Microsoft.Network/virtualNetworks/{vnet_name}"
+        vnet = query("resource", "show", "--ids", vnet_id, "--subscription", subscription, "--api-version", "2025-05-01")
+        if vnet.get("id", "").lower() != vnet_id.lower():
+            raise ValueError(f"Azure returned a different {side} VNet resource ID")
+        properties = vnet.get("properties", {})
+        if properties.get("provisioningState") != "Succeeded":
+            raise ValueError(f"The {side} VNet is not in a Succeeded state")
+        if location_key(vnet.get("location", "")) != location_key(location):
+            raise ValueError(f"The {side} VNet is in {vnet.get('location')}, but {side}Location is {location}; private endpoints and VNet integration must use the VNet region")
+        subnets = {item["name"].lower(): item for item in properties.get("subnets", [])}
+
+        endpoint_subnet = subnets.get(endpoint.lower())
+        if endpoint_subnet is None:
+            raise ValueError(f"The {side} VNet has no private endpoint subnet named {endpoint}")
+        if delegation_names(endpoint_subnet):
+            raise ValueError(f"The {side} private endpoint subnet {endpoint} is delegated, and private endpoints cannot use a delegated subnet")
+
+        existing_subnet = subnets.get(integration.lower())
+        if mode == "existing":
+            if existing_subnet is None:
+                raise ValueError(f"The {side} VNet has no integration subnet named {integration}")
+        else:
+            try:
+                requested = ipaddress.ip_network(prefix)
+            except ValueError:
+                raise ValueError(f"{side}IntegrationSubnetPrefix must be a CIDR prefix such as 10.0.4.0/27") from None
+            if requested.version != 4 or requested.prefixlen > MIN_INTEGRATION_PREFIX:
+                raise ValueError(f"{side}IntegrationSubnetPrefix must be an IPv4 prefix of /{MIN_INTEGRATION_PREFIX} or larger")
+            spaces = [ipaddress.ip_network(item) for item in properties.get("addressSpace", {}).get("addressPrefixes", [])]
+            if not any(requested.subnet_of(space) for space in spaces if space.version == 4):
+                raise ValueError(f"{side}IntegrationSubnetPrefix {prefix} is outside the {side} VNet address space")
+            for name, other in subnets.items():
+                if name != integration.lower() and any(requested.overlaps(network) for network in subnet_networks(other.get("properties", {}))):
+                    raise ValueError(f"{side}IntegrationSubnetPrefix {prefix} overlaps subnet {other['name']}")
+            if existing_subnet is not None and [str(item) for item in subnet_networks(existing_subnet.get("properties", {}))] != [str(requested)]:
+                raise ValueError(f"Subnet {integration} already exists in the {side} VNet with a different address prefix")
+        if existing_subnet is not None:
+            if delegation_names(existing_subnet) != [FLEX_DELEGATION]:
+                raise ValueError(f"The {side} integration subnet {integration} must be delegated only to Microsoft.App/environments")
+            networks = subnet_networks(existing_subnet.get("properties", {}))
+            if not networks or any(network.prefixlen > MIN_INTEGRATION_PREFIX for network in networks):
+                raise ValueError(f"The {side} integration subnet {integration} must be /{MIN_INTEGRATION_PREFIX} or larger")
+
+        for zone_id, zone_subscription in zone_ids:
+            if zone_id.lower() in checked_zones:
+                continue
+            checked_zones.add(zone_id.lower())
+            try:
+                zone = query("resource", "show", "--ids", zone_id, "--subscription", zone_subscription, "--api-version", "2024-06-01")
+            except RuntimeError as error:
+                if re.search(r"ResourceNotFound|ResourceGroupNotFound|SubscriptionNotFound|could not be found", str(error)):
+                    raise ValueError(f"Private DNS zone not found: {zone_id}") from None
+                print(f"Warning: could not read private DNS zone {zone_id}; verify it manually. {error}")
+                continue
+            if zone.get("id", "").lower() != zone_id.lower():
+                raise ValueError("Azure returned a different private DNS zone resource ID")
+        print(f"Existing {side} network preflight passed ({mode}): {vnet_id}")
+
+
 def existing_role_assignment_names(workload, subscription, query, known_identities=None, vault_scopes=None):
     known_identities = known_identities or {}
     identities = query("identity", "list", "--subscription", subscription) if len(known_identities) < 2 else []
@@ -296,6 +448,7 @@ def prepare_parameters(document, subscription, query=azure_json):
     resolved = preflight(parameters, subscription, query)
     workers = preflight_workers(parameters, subscription, resolved, query)
     preflight_workspaces(parameters, subscription, query)
+    preflight_networks(parameters, subscription, query)
     uses_rbac = any(vault["usesRbac"] for vault in resolved.values()) or any(
         not parameters.get(f"{side}VaultResourceId", {}).get("value", "")
         and parameters.get(f"{side}VaultAuthorizationModel", {}).get("value", "accessPolicy") == "rbac"
@@ -327,6 +480,7 @@ def main():
         vaults = preflight(document["parameters"], args.subscription)
         preflight_workers(document["parameters"], args.subscription, vaults, azure_json)
         preflight_workspaces(document["parameters"], args.subscription, azure_json)
+        preflight_networks(document["parameters"], args.subscription, azure_json)
 
 
 if __name__ == "__main__":

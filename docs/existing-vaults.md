@@ -14,7 +14,7 @@ their resource groups may differ from the new infrastructure groups.
 | Vault resource/configuration | Bicep `existing` reference; no vault PUT, recreation, network/security toggle, or tag changes |
 | Existing system topic | Reused by explicit ARM ID; no identity/configuration/diagnostic changes |
 | Authorization | Detect and preserve each vault's RBAC or access-policy model; add matching worker grants at that vault |
-| Networking | Add endpoint connections from the two solution VNets; leave previous connections/DNS views untouched |
+| Networking | Add endpoint connections from the two solution VNets (or reused VNets, where a reused vault's endpoint is created only when listed in `...EndpointsToCreate`); leave previous connections/DNS views untouched |
 | Events | Add a dedicated replication subscription to the selected/new system topic |
 | Vault diagnostics | Leave existing settings unchanged; use your existing audit destinations |
 | Secret contents | Only selected current-state secrets; unmanaged destination collisions rejected unless approved |

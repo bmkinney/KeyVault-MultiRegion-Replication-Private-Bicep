@@ -4,8 +4,10 @@ param prefix string
 param storageToken string
 @description('Regional location.')
 param location string
-@description('VNet and subnet CIDRs.')
+@description('VNet and subnet CIDRs. Used only when createNetwork is true.')
 param network object
+@description('Create the regional VNet, subnets, and private DNS zones. False reuses an existing VNet and DNS configuration.')
+param createNetwork bool = true
 @description('Optional alert notification email.')
 param alertEmail string
 @description('Resource tags.')
@@ -37,7 +39,7 @@ param existingWorkspaceResourceId string = ''
 @description('Associate a reused workspace with this region private link scope. Created workspaces are always associated.')
 param linkExistingWorkspaceToPrivateLinkScope bool = true
 
-resource vnet 'Microsoft.Network/virtualNetworks@2025-05-01' = {
+resource vnet 'Microsoft.Network/virtualNetworks@2025-05-01' = if (createNetwork) {
   name: 'vnet-${prefix}'
   location: location
   tags: tags
@@ -71,7 +73,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2025-05-01' = {
   }
 }
 
-var zoneList = items(zoneNames)
+var zoneList = createNetwork ? items(zoneNames) : []
 
 resource zones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for zone in zoneList: {
   name: zone.value
@@ -460,17 +462,12 @@ output queueId string = queue.id
 output topicName string = empty(existingSystemTopicResourceId) ? topic!.name : referencedTopic!.name
 output topicResourceGroup string = empty(existingSystemTopicResourceId) ? resourceGroup().name : split(existingSystemTopicResourceId, '/')[4]
 output monitorScopeId string = monitor.id
-output endpointSubnetId string = '${vnet.id}/subnets/endpoints'
-output zoneIds object = toObject(zoneList, zone => zone.key, zone => resourceId('Microsoft.Network/privateDnsZones', zone.value))
 output runtime object = {
   identityId: identity.id
   identityClientId: identity.properties.clientId
   storageName: accounts[0].name
   storageBlobUri: accounts[0].properties.primaryEndpoints.blob
   busNamespace: '${bus.name}.servicebus.windows.net'
-  integrationSubnetId: '${vnet.id}/subnets/integration'
-  endpointSubnetId: '${vnet.id}/subnets/endpoints'
-  appDnsZoneId: resourceId('Microsoft.Network/privateDnsZones', zoneNames.app)
   workspaceId: workspaceId
   insightsConnectionString: insights.properties.ConnectionString
   actionGroupId: actionGroup.id

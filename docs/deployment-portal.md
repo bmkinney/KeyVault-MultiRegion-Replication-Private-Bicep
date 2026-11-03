@@ -61,7 +61,10 @@ assign/action at its scope, normally included in Contributor at that scope.
 Contributor in the deployment subscription alone does not cover identities in
 other subscriptions; arrange read/assign grants at those identity scopes separately.
 
-Create VNets and subnets:
+Create VNets and subnets. To reuse existing VNets, subnets, and DNS zones instead,
+skip the VNet and DNS-zone creation in this section, but still delegate the
+integration subnet and link/resolve the zones as in
+[reusing existing VNets](existing-networks.md):
 
 | Setting | Primary | Secondary |
 | --- | --- | --- |

@@ -313,3 +313,49 @@ private acceptance and recovery **PENDING**. No tenant resources were queried,
 created, changed, or deployed during this implementation. Neither local doubles
 nor compilation proves an end-to-end Azure deployment. No production suitability
 or enforced trigger-only separation of duties is claimed.
+
+## Existing VNet and private DNS reuse (2026-11-03)
+
+Added per-region `new` (default), `newSubnet`, and `existing` network modes so a
+customer can deploy into existing VNets, subnets, and private DNS zones without
+new address space or firewall rules. The default configuration is unchanged.
+See [reusing existing VNets](existing-networks.md).
+
+| Check | Actual result |
+| --- | --- |
+| Main and all delegated stage templates; all four parameter examples; a mixed `existing`/`newSubnet` parameter file | Compilation exit 0, no new diagnostics |
+| Local Bicep snapshot evaluation of the mixed file (no Azure calls) | No VNet or DNS zone created; one delegated subnet in the reused VNet; all 18 endpoints land in the reused endpoint subnets; each Function app integrates with the selected subnet; zone groups only for supplied zones |
+| Local snapshot with reused vaults and `primaryEndpointsToCreate = ['secondaryVault']` | The unlisted reused vault gets no endpoint in the reused VNet; the listed one does; the new network still gets both |
+| Local snapshot of an invalid file | Fails validation with every missing/invalid network input named, before any resource |
+| Default example, snapshot compared to the previous commit | Same 160 predicted resources; only zone-group inputs that the local evaluator cannot resolve (`environment()`) differ in representation |
+| Unit suite | 139 run; the 12 new network preflight tests pass; `test_bindings` cannot import `azure.functions` in the interpreter used here (environment only) |
+| Compiled-infrastructure suite | **31 passed** (6 new for network modes, reuse wiring, subnet module, validation, vault-endpoint selection, and policy-managed DNS) |
+| Delegated compiled-stage suite | **5 passed** |
+| Portal Function artifact | Regenerated because the shared private-endpoint module changed |
+
+The network preflight reads the VNet, subnets, and supplied zones read-only and runs
+before any delegated container, group, or identity is created. It cannot prove
+NSG/route/DNS resolution or permissions. Checkov was not rerun for this change.
+**PENDING:** a live deployment into existing networks, subnet delegation/join
+behavior with real policy, private DNS record creation in shared zones, and the
+Azure Monitor DNS caveats described in [reusing existing VNets](existing-networks.md).
+No tenant resources were created, changed, or deployed during this implementation.
+
+### Migration of deployed regions to reused networks (2026-11-03)
+
+Added `Deploy.ps1 -MigrateNetwork [-Apply] [-FenceWorkers]`, backed by
+`scripts\migrate_network.py`. It deletes only private endpoints in the two deployed
+solution groups whose name, Private Link target, and subresource match what this
+deployment creates and that are not already in the configured subnet; endpoints that
+existed before the deployment are never listed or changed. It refuses to delete while
+replication is active unless it fences the workers first, validates the target
+network before any change, and reports (never deletes) the old VNet and DNS zones.
+
+| Check | Actual result |
+| --- | --- |
+| Migration unit tests (local Azure CLI doubles) | **9 passed**: preview changes nothing; foreign, look-alike, wrong-target, and already-moved endpoints are untouched; only solution groups are listed; reuse warnings; fence before delete; invalid target/ambiguous groups stop first; stuck deletion detected; idempotent rerun |
+| Deployment runner tests (real PowerShell, command doubles) | **6 passed**, including routing of the new switches and `-FenceWorkers` misuse |
+
+**PENDING:** a live migration, Azure's behavior when a Flex Consumption app is moved
+to a different VNet integration subnet, and endpoint recreation against real policy.
+No tenant resources were queried, created, changed, or deleted.

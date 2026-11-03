@@ -15,8 +15,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from check_vault_integration import (
-    azure_json, azure_text, existing_role_assignment_names, preflight, preflight_workers,
-    preflight_workspaces, prepare_parameters, validate_id,
+    azure_json, azure_text, existing_role_assignment_names, preflight, preflight_networks,
+    preflight_workers, preflight_workspaces, prepare_parameters, validate_id,
 )
 from delegated_readiness import ReadinessError, check, grant_guide, provider_namespaces
 from preview_validation import validate_preview
@@ -363,6 +363,7 @@ class DelegatedDeployment:
         vaults = preflight(original, self.subscription, self.query)
         preflight_workers(original, self.subscription, vaults, self.query)
         preflight_workspaces(original, self.subscription, self.query)
+        preflight_networks(original, self.subscription, self.query)
         provisioners = preflight_workers(
             arm_parameters({"primaryWorkerIdentityResourceId": self.provisioner_id})["parameters"],
             self.subscription, vaults, self.query,

@@ -4,8 +4,8 @@
   "metadata": {
     "_generator": {
       "name": "bicep",
-      "version": "0.47.16.16243",
-      "templateHash": "169413752490734963"
+      "version": "0.48.1.52935",
+      "templateHash": "3848531271722161140"
     }
   },
   "parameters": {
@@ -422,8 +422,8 @@
           "metadata": {
             "_generator": {
               "name": "bicep",
-              "version": "0.47.16.16243",
-              "templateHash": "5849532379246105690"
+              "version": "0.48.1.52935",
+              "templateHash": "12839192728198625690"
             }
           },
           "parameters": {
@@ -460,7 +460,7 @@
             "dnsZoneIds": {
               "type": "array",
               "metadata": {
-                "description": "Private DNS zone IDs for this endpoint."
+                "description": "Private DNS zone IDs for this endpoint. Empty entries are ignored; with none, no zone group is created and records are managed elsewhere (for example by Azure Policy)."
               }
             },
             "tags": {
@@ -469,6 +469,9 @@
                 "description": "Resource tags."
               }
             }
+          },
+          "variables": {
+            "zoneIds": "[filter(parameters('dnsZoneIds'), lambda('zoneId', not(empty(lambdaVariables('zoneId')))))]"
           },
           "resources": [
             {
@@ -495,6 +498,7 @@
               }
             },
             {
+              "condition": "[not(empty(variables('zoneIds')))]",
               "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
               "apiVersion": "2025-05-01",
               "name": "[format('{0}/{1}', parameters('name'), 'default')]",
@@ -502,11 +506,11 @@
                 "copy": [
                   {
                     "name": "privateDnsZoneConfigs",
-                    "count": "[length(parameters('dnsZoneIds'))]",
+                    "count": "[length(variables('zoneIds'))]",
                     "input": {
                       "name": "[format('zone-{0}', copyIndex('privateDnsZoneConfigs'))]",
                       "properties": {
-                        "privateDnsZoneId": "[parameters('dnsZoneIds')[copyIndex('privateDnsZoneConfigs')]]"
+                        "privateDnsZoneId": "[variables('zoneIds')[copyIndex('privateDnsZoneConfigs')]]"
                       }
                     }
                   }
