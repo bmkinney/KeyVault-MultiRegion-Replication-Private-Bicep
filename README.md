@@ -29,7 +29,9 @@ The same notice is available in [DISCLAIMER.md](DISCLAIMER.md).
   worker identities and administrator-provisioned permissions, without IAM writes.
 - [Delegated provisioning](docs/deployment-delegated.md): a Contributor supplies
   one precreated provisioning identity; keyless container jobs create workers
-  and apply grants under that identity.
+  and apply grants under that identity. Includes the
+  [after-`-Apply` checklist](docs/deployment-delegated.md#after--apply-complete-and-test-the-deployment):
+  verify, publish code, activate, wait for sync, and run acceptance tests.
 - [Architecture and limitations](docs/architecture.md).
 - [Use existing Key Vaults](docs/existing-vaults.md): independent new/existing selection,
   source filters, preserved vault settings, and protected destination collisions.

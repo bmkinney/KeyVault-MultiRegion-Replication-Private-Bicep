@@ -112,6 +112,135 @@ authorization stage succeeds. This can interrupt an active sample while it is
 being reprovisioned; it is not a zero-downtime upgrade workflow. ARM success does
 not prove grant propagation, private connectivity, or application health.
 
+## After `-Apply`: complete and test the deployment
+
+A successful `-Apply` with both activation flags `false` (the example default)
+leaves the infrastructure, identities, and grants in place but **replication
+off**: both workers contain no code, and both event routes are fenced. Replication
+does not start until you complete the steps below, in order. Run steps 2-6 from a
+machine with private connectivity to the VNets (VPN, ExpressRoute, or a jump
+host/runner); the ACI job cannot reach vault data or private endpoints.
+
+### 1. Confirm the stages and collect resource names
+
+- The final line should read `Delegated ARM stages completed.` If a stage failed,
+  fix it and rerun the same command before continuing; do not publish code to a
+  partial deployment. Failed-stage containers are kept for `az container logs`.
+- Successful-stage containers are deleted automatically. Remove any retained
+  execution resources according to local policy.
+- Read the deployed names. Do not add these values to the parameter file:
+
+```powershell
+$out = az deployment sub show --subscription '<subscription-id>' `
+  --name mrkv-infrastructure --query properties.outputs --output json | ConvertFrom-Json
+$out.primaryResources.value    # resourceGroup, functionApp, vaultUri, ...
+$out.secondaryResources.value
+```
+
+### 2. Verify private connectivity and grants
+
+- Every private endpoint connection is **Approved**, including vault, storage
+  (Blob/Queue/Table), Service Bus, the Function app/SCM, and Azure Monitor private
+  link.
+- From the connected machine, both vault hostnames, both app hostnames, and the
+  storage/Service Bus names resolve to **private** addresses in the local VNet.
+- Allow time for role-assignment and vault-policy propagation (commonly a few
+  minutes, sometimes longer) before judging the worker identities.
+
+### 3. Publish the code to both Function apps
+
+```powershell
+.\scripts\Publish-Functions.ps1 -SubscriptionId '<subscription-id>' `
+  -ResourceGroup $out.primaryResources.value.resourceGroup `
+  -AppName $out.primaryResources.value.functionApp
+.\scripts\Publish-Functions.ps1 -SubscriptionId '<subscription-id>' `
+  -ResourceGroup $out.secondaryResources.value.resourceGroup `
+  -AppName $out.secondaryResources.value.functionApp
+```
+
+- Publishing needs a path to the private deployment endpoint plus package-feed
+  and extension-bundle access for the remote build. Fix network restrictions;
+  do not enable public network access or Basic publishing credentials.
+- Both apps must list exactly **`Replicate`** and **`Reconcile`**.
+- Check Application Insights (through the private workspace) for host startup or
+  managed-identity errors. Resolve them before activation.
+
+### 4. Activate the primary region
+
+In `deployment.local.bicepparam` set:
+
+```bicep
+param enableWorker = true
+param enableEventRouting = true
+param authoritativeRegion = 'primary'
+```
+
+Preview, review, then apply with the same subscription and parameter file:
+
+```powershell
+.\scripts\Deploy.ps1 -SubscriptionId '<subscription-id>' `
+  -ParametersFile .\infra\parameters\deployment.local.bicepparam
+.\scripts\Deploy.ps1 -SubscriptionId '<subscription-id>' `
+  -ParametersFile .\infra\parameters\deployment.local.bicepparam -Apply
+```
+
+The rerun briefly fences workers while grants are re-applied, then enables the
+selected authority only after every authorization stage succeeds. Only the
+primary worker and route become active; the secondary stays fenced until a
+manual promotion (see [operations](operations.md)). Never apply the default
+`'primary'` while the secondary is authoritative.
+
+### 5. Wait for initial synchronization
+
+The next timer run (within five minutes) copies the selected secrets. Query the
+private workspace:
+
+```kusto
+AppTraces
+| where TimeGenerated > ago(1h)
+| where Message startswith "MRKV "
+| extend report = parse_json(substring(Message, 5))
+| project TimeGenerated, AppRoleName, report
+| order by TimeGenerated desc
+```
+
+Do not treat the secondary as ready until a `reconciliation_complete` record
+reports zero failures and the secret inventory matches the selected names. If
+primary secrets are changing, restrict writes or repeat until the source and
+replica converge. Compare values and applicable properties without printing them
+to terminals, logs, or reports.
+
+### 6. Run the acceptance test
+
+Use an identity distinct from the worker and deployment identities, with write
+on the source vault and read on the replica:
+
+```powershell
+.\scripts\Test-Replication.ps1 `
+  -SourceVaultUri $out.primaryResources.value.vaultUri `
+  -DestinationVaultUri $out.secondaryResources.value.vaultUri `
+  -CreateSyntheticSecret
+```
+
+It enforces the 60-second value/metadata/lineage threshold, never prints the
+value, and keeps the uniquely named synthetic secret; delete it yourself when
+done. Then complete the rest of the
+[acceptance checks](deployment-bicep.md#6-acceptance-checks) table (public reads
+denied, duplicate/older events, source disabled, destination-only warning,
+failure alerts, private telemetry, and an action-group test notification).
+
+### 7. Finish
+
+- Add recipients to the action group; without them no notifications are delivered.
+- Run the controlled promotion and failback exercise in
+  [operations](operations.md) before relying on recovery.
+- Only live evidence can establish latency, quota/policy compatibility, and the
+  30-minute recovery target. See [validation](validation.md).
+- Future updates: publish the same tested revision to both workers, and keep the
+  current `authoritativeRegion` in the parameter file on every rerun.
+
+If a step fails, see [troubleshooting](troubleshooting.md).
+
 ## Administrator-scoped prerequisites
 
 Precreate the provisioning identity; no execution RG is needed. For tight scoping,
