@@ -196,9 +196,13 @@ vault deployment without discovery is not the supported workflow.
 
 The preview is full-payload JSON, including property changes, rather than the
 CLI's colored summary. Review every create/modify/delete and confirm no unrelated
-resource is changed. Any diagnostics, ignored/unsupported/unevaluated resources,
+resource is changed. Any diagnostics, unsupported/unevaluated resources,
 additional potential/paginated results, malformed output, or failed command
 blocks deployment, **even with `-Apply`**. There is no incomplete-preview override.
+Existing resources the template does not define, which what-if reports as `Ignore`
+(for example resources Azure adds itself, or the old VNet and DNS zones left after a
+[network migration](existing-networks.md)), are listed but allowed: incremental mode
+never modifies or deletes them.
 Unknown runtime property differences may still appear; complete module expansion
 does not mean that every property's final value is predictable.
 

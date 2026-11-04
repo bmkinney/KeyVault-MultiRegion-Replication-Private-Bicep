@@ -231,7 +231,12 @@ rolled back automatically, and reverse migration from reused networks back to
 If Azure rejects moving the Function app to the new integration subnet during step 4,
 remove its VNet integration with
 `az functionapp vnet-integration remove --name <app> --resource-group <group>` while it
-is fenced, and rerun step 4. This path is untested against a live app.
+is fenced, and rerun step 4. This fallback was not needed in the live test below, where
+the Flex Consumption apps moved between subnets in place.
+
+Step 4 passes the normal what-if coverage gate. The old VNet, DNS zones, and any
+endpoint this deployment did not create appear as `Ignore`, which incremental mode never
+modifies or deletes.
 
 ## Not supported
 

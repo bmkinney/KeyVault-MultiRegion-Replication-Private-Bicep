@@ -187,12 +187,24 @@ class DeploymentRunnerTests(unittest.TestCase):
             "invalid JSON",
             "null",
         ]
-        previews.extend({**valid, "changes": [{**CHANGE, "changeType": kind}]} for kind in ("Ignore", "Unsupported", "Deploy", "FutureType"))
+        previews.extend({**valid, "changes": [{**CHANGE, "changeType": kind}]} for kind in ("Unsupported", "Deploy", "FutureType"))
+        previews.append({**valid, "changes": [{**CHANGE, "changeType": "Ignore", "unsupportedReason": "not analyzed"}]})
+        previews.append({**valid, "changes": [{**CHANGE, "changeType": "Ignore"}], "diagnostics": [{"code": "NestedDeploymentShortCircuited"}]})
+        previews.append({**valid, "changes": [{"changeType": "Ignore"}]})
         for preview in previews:
             with self.subTest(preview=preview):
                 result, _, created = self.run_preview(preview)
                 self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertFalse(created)
+
+    def test_existing_resources_the_template_does_not_define_are_allowed_and_never_deleted(self):
+        # Azure lists unmanaged resources in the groups (old networks after a migration, service-created children) as Ignore.
+        ignored = {**CHANGE, "resourceId": RESOURCE_ID + "/providers/Microsoft.Network/virtualNetworks/old", "changeType": "Ignore"}
+        result, calls, created = self.run_preview({"status": "Succeeded", "changes": [CHANGE, ignored]})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(created)
+        mode = next(call for call in calls if call["arguments"][:3] == ["deployment", "sub", "create"])
+        self.assertNotIn("Complete", json.dumps(mode["arguments"]))
 
     def test_command_failures_and_old_cli_never_create(self):
         for failure in ("version", "compile", "preflight", "validate", "what-if"):

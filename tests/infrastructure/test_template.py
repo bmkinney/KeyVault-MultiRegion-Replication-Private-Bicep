@@ -612,7 +612,10 @@ class InfrastructureTests(unittest.TestCase):
         for side in ("primary", "secondary"):
             module = deployment(f"{side}-integration-subnet")
             self.assertEqual(module["condition"], f"[equals(parameters('{side}NetworkMode'), 'newSubnet')]")
-            self.assertEqual(module["resourceGroup"], f"[parameters('{side}VnetResourceGroupName')]")
+            self.assertEqual(
+                module["resourceGroup"],
+                f"[if(empty(parameters('{side}VnetResourceGroupName')), format('rg-{{0}}', variables('{side}Prefix')), parameters('{side}VnetResourceGroupName'))]",
+            )
             template = module["properties"]["template"]
             subnets = [item for item in template["resources"] if item["type"] == "Microsoft.Network/virtualNetworks/subnets"]
             self.assertEqual(len(subnets), 1)
@@ -655,6 +658,13 @@ class InfrastructureTests(unittest.TestCase):
         endpoints = {side: deployment(f"{side}-endpoints")["properties"]["parameters"] for side in ("primary", "secondary")}
         self.assertEqual(endpoints["primary"]["createLocalVaultEndpoint"]["value"], "[variables('stamps')[0].createLocalVaultEndpoint]")
         self.assertEqual(endpoints["secondary"]["createRemoteVaultEndpoint"]["value"], "[variables('stamps')[1].createRemoteVaultEndpoint]")
+
+    def test_new_vault_uri_is_derived_not_read_back_from_a_just_created_vault(self):
+        for side in ("primary", "secondary"):
+            outputs = deployment(f"{side}-foundation")["properties"]["template"]["outputs"]
+            expression = outputs["vaultUri"]["value"]
+            self.assertNotIn("reference(resourceId('Microsoft.KeyVault/vaults', format('kv-{0}', parameters('prefix')))", expression)
+            self.assertIn("environment().suffixes.keyvaultDns", expression)
 
     def test_private_endpoints_tolerate_policy_managed_dns(self):
         zone_groups = of_type("Microsoft.Network/privateEndpoints/privateDnsZoneGroups")

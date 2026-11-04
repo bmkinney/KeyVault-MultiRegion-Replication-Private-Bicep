@@ -359,3 +359,24 @@ network before any change, and reports (never deletes) the old VNet and DNS zone
 **PENDING:** a live migration, Azure's behavior when a Flex Consumption app is moved
 to a different VNet integration subnet, and endpoint recreation against real policy.
 No tenant resources were queried, created, changed, or deleted.
+
+### Live migration test (2026-11-04, sandbox subscription)
+
+Deployed the standard solution (workload `mrkvt`, South Central US + West US 2, dedicated
+VNets), created target VNets and per-region private DNS zones, then migrated: South Central
+US in `existing` mode and West US 2 in `newSubnet` mode. A decoy endpoint, created outside
+the deployment in a solution group, represented a customer's pre-existing endpoint.
+
+| Check | Actual result |
+| --- | --- |
+| Standard deployment, direct mode, new vaults | First apply failed: a just-created vault returned 404 when its URI was read back. Fixed by deriving the URI; reapply succeeded, 18 endpoints Approved |
+| Network preflight against real VNets/zones | Passed for both modes |
+| `-MigrateNetwork` preview, then `-Apply` | Listed and deleted exactly the 18 solution endpoints; the decoy endpoint was left untouched |
+| Normal deployment preview after migration | Blocked by the coverage gate on `Ignore` entries (old VNet, zones, decoy, Azure-created child resources). Fixed by allowing `Ignore`, as the delegated validator already did; diagnostics, `unsupportedReason`, and paging still block |
+| Normal deployment `-Apply` | Succeeded: 18 endpoints Approved in the target endpoint subnets, DNS records in the target zones (old zones empty), both Function apps on the target integration subnets (the West US 2 subnet was created and delegated), public access still Disabled |
+| Rerun `-MigrateNetwork` preview | Kept all 18, left the decoy, nothing to delete |
+
+The test used a Python shim because the Azure CLI's embedded Python does not put a script's
+directory on `sys.path`; a normal Python installation does not need it. Not exercised:
+active replication, code publication, private-connectivity resolution from inside the VNets,
+Checkov, and delegated mode.

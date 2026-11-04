@@ -71,7 +71,7 @@ try {
     }
     $Diagnostics = @(@($Preview.diagnostics) + @($Result.diagnostics) | Where-Object { $null -ne $_ })
     $Incomplete = @($Result.changes | Where-Object {
-        $_.changeType -notin @('Create', 'Modify', 'Delete', 'NoChange') -or
+        $_.changeType -notin @('Create', 'Modify', 'Delete', 'NoChange', 'Ignore') -or
         [string]::IsNullOrWhiteSpace($_.resourceId) -or
         -not [string]::IsNullOrWhiteSpace($_.unsupportedReason)
     })

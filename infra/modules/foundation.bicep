@@ -121,7 +121,8 @@ resource referencedVault 'Microsoft.KeyVault/vaults@2026-02-01' existing = if (!
 }
 
 var selectedVaultId = empty(existingVaultResourceId) ? vault.id : referencedVault!.id
-var selectedVaultUri = empty(existingVaultResourceId) ? vault.properties.vaultUri : referencedVault!.properties.vaultUri
+// A just-created vault can briefly return 404 on read, so its URI is derived, never read back.
+var selectedVaultUri = empty(existingVaultResourceId) ? 'https://kv-${prefix}${environment().suffixes.keyvaultDns}/' : referencedVault!.properties.vaultUri
 
 var accountNames = ['st${storageToken}run', 'st${storageToken}dl']
 resource accounts 'Microsoft.Storage/storageAccounts@2025-06-01' = [for (accountName, index) in accountNames: {

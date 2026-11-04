@@ -87,8 +87,9 @@ fresh complete preview before each stage's mutations:
 
 `-Apply` authorizes the visible staged workflow, including bootstrap before later
 previews can finish. It does not bypass incomplete what-if: diagnostics,
-Unsupported/Ignore/unknown changes, additional results, malformed output, and
-deletes block the affected stage. Earlier completed stages remain if a later
+Unsupported/unknown changes, additional results, malformed output, and
+deletes block the affected stage; `Ignore` (an existing resource the stage template
+does not define) is allowed because incremental mode never touches it. Earlier completed stages remain if a later
 stage fails; no automatic rollback or grant deletion is attempted. Review stage
 results and rerun with the same subscription/workload/parameters to repair.
 

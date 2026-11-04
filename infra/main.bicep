@@ -347,7 +347,7 @@ module secondaryIdentity './modules/worker-identity.bicep' = if (managePermissio
 
 module primaryIntegrationSubnet './modules/integration-subnet.bicep' = if (primaryNetworkMode == 'newSubnet') {
   name: 'primary-integration-subnet'
-  scope: resourceGroup(primaryVnetResourceGroupName)
+  scope: resourceGroup(empty(primaryVnetResourceGroupName) ? primaryGroup.name : primaryVnetResourceGroupName)
   params: {
     vnetName: primaryVnetName
     subnetName: stampInputs[0].integrationSubnetName
@@ -357,7 +357,7 @@ module primaryIntegrationSubnet './modules/integration-subnet.bicep' = if (prima
 
 module secondaryIntegrationSubnet './modules/integration-subnet.bicep' = if (secondaryNetworkMode == 'newSubnet') {
   name: 'secondary-integration-subnet'
-  scope: resourceGroup(secondaryVnetResourceGroupName)
+  scope: resourceGroup(empty(secondaryVnetResourceGroupName) ? secondaryGroup.name : secondaryVnetResourceGroupName)
   params: {
     vnetName: secondaryVnetName
     subnetName: stampInputs[1].integrationSubnetName
