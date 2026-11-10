@@ -158,7 +158,8 @@ A deployed region can move from `new` to `existing` or `newSubnet` without
 recreating vaults, secrets, storage, Service Bus, identities, grants, or monitoring.
 Only the network layer changes: the private endpoints are replaced and the Function
 app is re-pointed. Incremental deployments never delete, so
-`scripts\Deploy.ps1 -MigrateNetwork` removes the stale endpoints first.
+`scripts\Deploy.ps1 -MigrateNetwork` moves Function App VNet integration and removes
+the stale endpoints before redeployment.
 
 1. **Configure.** In your parameter file set `...NetworkMode` and the VNet, subnet,
    DNS zone, and `...EndpointsToCreate` values for each region to migrate. Keep the
@@ -172,8 +173,9 @@ app is re-pointed. Incremental deployments never delete, so
    ```
 
    It validates the target network as the deployment preflight does, finds the two
-   deployed solution groups, and lists what it would delete, keep, and leave.
-3. **Remove the old endpoints.** Replication stops here. If workers are active, add
+   deployed solution groups, and lists Function App integration moves and what it
+   would delete, keep, and leave.
+3. **Move Function App integration and remove the old endpoints.** Replication stops here. If workers are active, add
    `-FenceWorkers`; without it, `-Apply` refuses to continue while replication is on.
 
    ```powershell
@@ -182,9 +184,17 @@ app is re-pointed. Incremental deployments never delete, so
      -MigrateNetwork -Apply -FenceWorkers
    ```
 
+   For each migrating region, this moves the solution Function App to the configured
+   integration subnet and reads it back to verify the change before deleting that
+   region's old private endpoints, including the Function App endpoint. In `newSubnet`
+   mode it first creates the integration subnet, delegated to `Microsoft.App/environments`,
+   if it does not exist. Existing subnets are never modified. Already-moved apps and
+   missing apps are skipped. Errors stop migration; workers are not automatically
+   reactivated.
+
 4. **Deploy.** Preview, then apply with the same parameter file (delegated mode uses
    the same commands). This recreates the endpoints in the reused subnets with the
-   supplied DNS zones and moves each app to the new integration subnet:
+   supplied DNS zones and preserves each app's target integration subnet:
 
    ```powershell
    .\scripts\Deploy.ps1 -SubscriptionId '<subscription-id>' -ParametersFile .\infra\parameters\deployment.local.bicepparam
@@ -228,10 +238,10 @@ moved are kept, and a rerun after success finds nothing to delete. Nothing is
 rolled back automatically, and reverse migration from reused networks back to
 `new` is not scripted.
 
-If Azure rejects moving the Function app to the new integration subnet during step 4,
+If Azure rejects moving the Function app to the new integration subnet during step 3,
 remove its VNet integration with
 `az functionapp vnet-integration remove --name <app> --resource-group <group>` while it
-is fenced, and rerun step 4. This fallback was not needed in the live test below, where
+is fenced, and rerun step 3. This fallback was not needed in the earlier live test, where
 the Flex Consumption apps moved between subnets in place.
 
 Step 4 passes the normal what-if coverage gate. The old VNet, DNS zones, and any

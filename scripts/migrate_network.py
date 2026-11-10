@@ -1,4 +1,4 @@
-"""Moves a deployed solution onto reused networks by replacing only the private endpoints it created.
+"""Moves solution Function App integration and private endpoints onto reused networks.
 
 Read-only unless --apply. It lists endpoints only in the two deployed solution resource
 groups and deletes one only when its name, Private Link target, and subresource all match what
@@ -154,6 +154,14 @@ def build_plan(values, subscription, query):
         app = read_app(f"/subscriptions/{subscription}/resourceGroups/{group}/providers/{PROVIDERS['app']}/{item['app']}", subscription, query)
         item["app_subnet"] = None if app is None else (app.get("properties", {}).get("virtualNetworkSubnetId") or "")
         item["active"] = app is not None and worker_active(item["app"], group, subscription, query)
+        item["move_app"] = app is not None and lower(item["app_subnet"]) != lower(integration_subnet)
+        item["create_integration_subnet"] = False
+        if item["move_app"] and modes[side] == "newSubnet":
+            vnet_id, _, subnet_name = integration_subnet.rpartition("/subnets/")
+            vnet = query("resource", "show", "--ids", vnet_id, "--subscription", subscription, "--api-version", "2025-05-01")
+            item["create_integration_subnet"] = not any(
+                lower(subnet["name"]) == lower(subnet_name) for subnet in vnet.get("properties", {}).get("subnets", [])
+            )
         plan.append(item)
     return plan
 
@@ -187,7 +195,13 @@ def migrate(values, subscription, apply, fence, query=azure_command):
             print(f"  Function app {item['app']}: not found")
         else:
             print(f"  Function app {item['app']}: integration subnet is {item['app_subnet'] or 'not set'}; "
-                  f"the next Deploy.ps1 -Apply sets it to {item['integration_subnet']}; replication active: {item['active']}")
+                  f"replication active: {item['active']}")
+            if item["create_integration_subnet"]:
+                print(f"  {'CREATE' if apply else 'would create'} delegated integration subnet {item['integration_subnet']}")
+            if item["move_app"]:
+                print(f"  {'MOVE' if apply else 'would move'} Function app {item['app']} to {item['integration_subnet']}")
+            else:
+                print(f"  keep Function app {item['app']} integration (already in the target subnet)")
         for entry in item["delete"]:
             print(f"  {'DELETE' if apply else 'would delete'} {entry['name']} (created by this deployment, currently in {entry['subnet']})")
         for name in item["keep"]:
@@ -204,7 +218,7 @@ def migrate(values, subscription, apply, fence, query=azure_command):
             raise ValueError(f"Replication is active on {names}. Fence the workers first (operations guide) or pass -FenceWorkers. Nothing was deleted.")
         print(f"Replication is active on {names}; -Apply requires -FenceWorkers or a prior manual fence.")
     if not apply:
-        print("Preview only. Nothing was changed. Rerun with -Apply to replace the listed endpoints.")
+        print("Preview only. Nothing was changed. Rerun with -Apply to move Function App integration and replace the listed endpoints.")
         return plan
     for item in active:
         print(f"Fencing {item['app']}")
@@ -213,6 +227,21 @@ def migrate(values, subscription, apply, fence, query=azure_command):
     for item in plan:
         if not item["migrate"]:
             continue
+        if item["move_app"]:
+            side = item["side"]
+            if item["create_integration_subnet"]:
+                query("network", "vnet", "subnet", "create", "--resource-group", values[side + "VnetResourceGroupName"],
+                      "--vnet-name", values[side + "VnetName"], "--name", item["integration_subnet"].rsplit("/", 1)[1],
+                      "--address-prefixes", values[side + "IntegrationSubnetPrefix"],
+                      "--delegations", "Microsoft.App/environments", "--subscription", subscription)
+            app_id = f"/subscriptions/{subscription}/resourceGroups/{item['group']}/providers/{PROVIDERS['app']}/{item['app']}"
+            query("resource", "update", "--ids", app_id, "--subscription", subscription, "--api-version", "2025-03-01",
+                  "--set", f"properties.virtualNetworkSubnetId={item['integration_subnet']}")
+            app = read_app(app_id, subscription, query)
+            actual_subnet = "" if app is None else app.get("properties", {}).get("virtualNetworkSubnetId")
+            if lower(actual_subnet) != lower(item["integration_subnet"]):
+                raise RuntimeError(f"Function app {item['app']} integration did not move to {item['integration_subnet']}; "
+                                   "no endpoints in this region were deleted. Workers remain fenced if fencing was requested.")
         for entry in item["delete"]:
             query("network", "private-endpoint", "delete", "--ids", entry["id"], "--subscription", subscription)
         remaining = {lower(endpoint["name"]) for endpoint in
@@ -220,7 +249,8 @@ def migrate(values, subscription, apply, fence, query=azure_command):
         stuck = [entry["name"] for entry in item["delete"] if entry["name"].lower() in remaining]
         if stuck:
             raise RuntimeError(f"Endpoints still present after deletion: {', '.join(stuck)}")
-    print("Old endpoints removed. Run Deploy.ps1 -Apply with the same parameters to recreate them in the reused subnets and re-point the apps.")
+    print("Function App integration migrated and old endpoints removed. Run Deploy.ps1 -Apply with the same parameters "
+          "to recreate the endpoints in the reused subnets. Keep workers fenced until deployment and verification complete.")
     for item in plan:
         if item["migrate"]:
             for leftover in report_old_network(item, subscription, query):
@@ -232,8 +262,8 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--parameters", required=True)
     parser.add_argument("--subscription", required=True)
-    parser.add_argument("--apply", action="store_true", help="Delete the endpoints this deployment created in the wrong network")
-    parser.add_argument("--fence-workers", action="store_true", help="Fence active workers before deleting endpoints")
+    parser.add_argument("--apply", action="store_true", help="Move Function App integration and delete solution endpoints in the wrong network")
+    parser.add_argument("--fence-workers", action="store_true", help="Fence active workers before moving integration or deleting endpoints")
     args = parser.parse_args()
     document = json.loads(Path(args.parameters).read_text(encoding="utf-8-sig"))
     values = {key: item.get("value") for key, item in document["parameters"].items()}
