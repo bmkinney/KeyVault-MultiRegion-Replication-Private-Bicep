@@ -178,6 +178,15 @@ class MigrationTests(unittest.TestCase):
                 updates = [call for call in self.calls if call[:3] == MOVE]
                 self.assertEqual(len(updates), 1 if subnet == "" else 0)
 
+    def test_integration_subnet_already_linked_to_another_app_stops_before_any_change(self):
+        other = f"/subscriptions/{SUB}/resourceGroups/customer/providers/Microsoft.Web/sites/other-func"
+        self.vnet["properties"]["subnets"][0]["properties"]["serviceAssociationLinks"] = [{"name": "sal", "properties": {"link": other}}]
+        self.settings = [{"name": "REPLICATION_ENABLED", "value": "true"}]
+        with self.assertRaisesRegex(ValueError, "already linked to .*other-func"):
+            self.run_migration(values(), apply=True, fence=True)
+        self.assertFalse([call for call in self.calls if call[:3] == MOVE or call[:3] == ("network", "private-endpoint", "delete")
+                          or call[:4] == ("functionapp", "config", "appsettings", "set")])
+
     def test_both_regions_move_to_their_own_configured_integration_subnets(self):
         self.run_migration(values(
             secondaryNetworkMode="existing", secondaryVnetName="vnet-cus",

@@ -156,12 +156,19 @@ def build_plan(values, subscription, query):
         item["active"] = app is not None and worker_active(item["app"], group, subscription, query)
         item["move_app"] = app is not None and lower(item["app_subnet"]) != lower(integration_subnet)
         item["create_integration_subnet"] = False
-        if item["move_app"] and modes[side] == "newSubnet":
+        if item["move_app"]:
             vnet_id, _, subnet_name = integration_subnet.rpartition("/subnets/")
             vnet = query("resource", "show", "--ids", vnet_id, "--subscription", subscription, "--api-version", "2025-05-01")
-            item["create_integration_subnet"] = not any(
-                lower(subnet["name"]) == lower(subnet_name) for subnet in vnet.get("properties", {}).get("subnets", [])
-            )
+            target = next((subnet for subnet in vnet.get("properties", {}).get("subnets", [])
+                           if lower(subnet["name"]) == lower(subnet_name)), None)
+            item["create_integration_subnet"] = target is None and modes[side] == "newSubnet"
+            # The app is not on this subnet yet, so any link means another app (or a stale link) holds it.
+            links = [link.get("properties", {}).get("link") or link.get("name", "")
+                     for link in (target or {}).get("properties", {}).get("serviceAssociationLinks") or []]
+            if links:
+                raise ValueError(
+                    f"The {side} integration subnet {subnet_name} is already linked to {', '.join(links)}; "
+                    "a Flex Consumption subnet can serve only one app. Use a different subnet or remove the stale link. Nothing was changed.")
         plan.append(item)
     return plan
 
