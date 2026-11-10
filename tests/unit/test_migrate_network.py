@@ -17,6 +17,7 @@ PRIMARY_PREFIX, SECONDARY_PREFIX = f"mrkv-p-{TOKEN}", f"mrkv-s-{TOKEN}"
 REUSED_VAULT = f"/subscriptions/{SUB}/resourceGroups/customer-vaults/providers/Microsoft.KeyVault/vaults/primary-vault"
 SECONDARY_VAULT = f"/subscriptions/{SUB}/resourceGroups/{SECONDARY_GROUP}/providers/Microsoft.KeyVault/vaults/kv-{SECONDARY_PREFIX}"
 NEW_PE_SUBNET = f"/subscriptions/{SUB}/resourceGroups/rg-network/providers/Microsoft.Network/virtualNetworks/vnet-eus/subnets/snet-pe"
+MOVE = ("functionapp", "vnet-integration", "add")
 NEW_APP_SUBNET = f"/subscriptions/{SUB}/resourceGroups/rg-network/providers/Microsoft.Network/virtualNetworks/vnet-eus/subnets/snet-func"
 OLD_SUBNET = f"/subscriptions/{SUB}/resourceGroups/{PRIMARY_GROUP}/providers/Microsoft.Network/virtualNetworks/vnet-{PRIMARY_PREFIX}/subnets/endpoints"
 
@@ -114,11 +115,13 @@ class MigrationTests(unittest.TestCase):
                 if subnet is None:
                     raise RuntimeError("(ResourceNotFound) The Resource could not be found")
                 return {"properties": {"virtualNetworkSubnetId": subnet}}
-        if args[:2] == ("resource", "update"):
+        if args[:3] == MOVE:
             if self.fail_app_update:
                 raise RuntimeError("Function app update failed")
+            self.assertEqual(option("--skip-delegation-check"), "true")
+            self.assertEqual(option("--subnet").rpartition("/subnets/")[0], option("--vnet"))
             if not self.keep_app_subnet:
-                self.app_subnets[option("--ids").split("/")[4]] = option("--set").split("=", 1)[1]
+                self.app_subnets[f"rg-{option('--name').removeprefix('func-')}"] = option("--subnet")
             return {}
         if args[:4] == ("network", "vnet", "subnet", "create"):
             self.vnet["properties"]["subnets"].append({
@@ -153,14 +156,14 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(self.deleted(), [])
         self.assertFalse([call for call in self.calls if call[:4] == ("functionapp", "config", "appsettings", "set")])
         self.assertIn(f"would move Function app func-{PRIMARY_PREFIX} to {NEW_APP_SUBNET}", output)
-        self.assertFalse([call for call in self.calls if call[:2] == ("resource", "update")
+        self.assertFalse([call for call in self.calls if call[:3] == MOVE
                           or call[:4] == ("network", "vnet", "subnet", "create")])
 
     def test_function_app_integration_moves_and_is_verified_before_endpoint_deletion(self):
         self.run_migration(values(), apply=True)
         self.assertEqual(self.app_subnets[PRIMARY_GROUP], NEW_APP_SUBNET)
         self.assertNotEqual(self.app_subnets[SECONDARY_GROUP], NEW_APP_SUBNET)
-        update = next(index for index, call in enumerate(self.calls) if call[:2] == ("resource", "update"))
+        update = next(index for index, call in enumerate(self.calls) if call[:3] == MOVE)
         deletion = next(index for index, call in enumerate(self.calls) if call[:3] == ("network", "private-endpoint", "delete"))
         self.assertLess(update, deletion)
         self.assertTrue(any(call[:2] == ("resource", "show") and "/sites/func-" in call[call.index("--ids") + 1]
@@ -172,7 +175,7 @@ class MigrationTests(unittest.TestCase):
                 self.calls.clear()
                 self.app_subnets[PRIMARY_GROUP] = subnet
                 self.run_migration(values(), apply=True)
-                updates = [call for call in self.calls if call[:2] == ("resource", "update")]
+                updates = [call for call in self.calls if call[:3] == MOVE]
                 self.assertEqual(len(updates), 1 if subnet == "" else 0)
 
     def test_both_regions_move_to_their_own_configured_integration_subnets(self):
@@ -183,7 +186,7 @@ class MigrationTests(unittest.TestCase):
         ), apply=True)
         self.assertEqual(self.app_subnets[PRIMARY_GROUP], NEW_APP_SUBNET)
         self.assertEqual(self.app_subnets[SECONDARY_GROUP], NEW_APP_SUBNET.replace("vnet-eus", "vnet-cus"))
-        self.assertEqual(len([call for call in self.calls if call[:2] == ("resource", "update")]), 2)
+        self.assertEqual(len([call for call in self.calls if call[:3] == MOVE]), 2)
 
     def test_failed_or_unverified_app_move_stops_before_endpoint_deletion(self):
         self.settings = [{"name": "REPLICATION_ENABLED", "value": "true"}]
@@ -206,13 +209,13 @@ class MigrationTests(unittest.TestCase):
         self.assertFalse([call for call in self.calls if call[:4] == ("network", "vnet", "subnet", "create")])
         self.run_migration(config, apply=True)
         creation = next(index for index, call in enumerate(self.calls) if call[:4] == ("network", "vnet", "subnet", "create"))
-        update = next(index for index, call in enumerate(self.calls) if call[:2] == ("resource", "update"))
+        update = next(index for index, call in enumerate(self.calls) if call[:3] == MOVE)
         self.assertLess(creation, update)
         self.assertEqual(self.app_subnets[PRIMARY_GROUP], NEW_APP_SUBNET)
         self.calls.clear()
         self.run_migration(config, apply=True)
         self.assertFalse([call for call in self.calls if call[:4] == ("network", "vnet", "subnet", "create")
-                          or call[:2] == ("resource", "update")])
+                          or call[:3] == MOVE])
 
     def test_existing_new_subnet_is_reused_without_being_modified(self):
         self.run_migration(values(primaryNetworkMode="newSubnet", primaryIntegrationSubnetPrefix="10.50.1.0/27"), apply=True)
@@ -254,12 +257,12 @@ class MigrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Fence the workers first"):
             self.run_migration(values(), apply=True)
         self.assertEqual(self.deleted(), [])
-        self.assertFalse([call for call in self.calls if call[:2] == ("resource", "update")])
+        self.assertFalse([call for call in self.calls if call[:3] == MOVE])
         output = self.run_migration(values(), apply=True, fence=True)
         self.assertIn("Fencing func-", output)
         order = [call[:3] if call[:3] == ("network", "private-endpoint", "delete") else call[:4] for call in self.calls]
         self.assertLess(order.index(("functionapp", "config", "appsettings", "set")), order.index(("network", "private-endpoint", "delete")))
-        update = next(index for index, call in enumerate(self.calls) if call[:2] == ("resource", "update"))
+        update = next(index for index, call in enumerate(self.calls) if call[:3] == MOVE)
         fencing = next(index for index, call in enumerate(self.calls) if call[:4] == ("functionapp", "config", "appsettings", "set"))
         self.assertLess(fencing, update)
         fence = next(call for call in self.calls if call[:4] == ("functionapp", "config", "appsettings", "set"))

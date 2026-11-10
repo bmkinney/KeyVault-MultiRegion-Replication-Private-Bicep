@@ -235,8 +235,10 @@ def migrate(values, subscription, apply, fence, query=azure_command):
                       "--address-prefixes", values[side + "IntegrationSubnetPrefix"],
                       "--delegations", "Microsoft.App/environments", "--subscription", subscription)
             app_id = f"/subscriptions/{subscription}/resourceGroups/{item['group']}/providers/{PROVIDERS['app']}/{item['app']}"
-            query("resource", "update", "--ids", app_id, "--subscription", subscription, "--api-version", "2025-03-01",
-                  "--set", f"properties.virtualNetworkSubnetId={item['integration_subnet']}")
+            # The preflight already validated the Flex delegation; skip the CLI's Microsoft.Web/serverFarms check.
+            query("functionapp", "vnet-integration", "add", "--name", item["app"], "--resource-group", item["group"],
+                  "--vnet", item["integration_subnet"].rpartition("/subnets/")[0], "--subnet", item["integration_subnet"],
+                  "--skip-delegation-check", "true", "--subscription", subscription)
             app = read_app(app_id, subscription, query)
             actual_subnet = "" if app is None else app.get("properties", {}).get("virtualNetworkSubnetId")
             if lower(actual_subnet) != lower(item["integration_subnet"]):
